@@ -1,3 +1,3 @@
-"""jxcel package foundation; conversion functionality is not implemented yet."""
+"""jxcel: JSON dataset to Excel workbook conversion."""
 
 __version__ = "0.1.0a0"

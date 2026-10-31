@@ -614,6 +614,52 @@ def prepared_rows(
     return iter(plan.validated_rows)
 
 
+def preview_rows(
+    plan: DatasetPlan,
+    limit: int,
+) -> Iterator[tuple[PreparedValue, ...]]:
+    """Return at most *limit* prepared rows for a selected, exportable plan.
+
+    Export-validated plans yield from their immutable snapshot. Schema-only
+    plans prepare only the requested rows and do not perform export
+    validation on values outside the preview window.
+    """
+    if limit < 0:
+        raise ValueError(f"Preview limit must be nonnegative, got {limit}")
+    if not plan.selected:
+        raise PlanningError(
+            f"Dataset plan {plan.pointer!r} is not selected"
+        )
+    if not plan.exportable:
+        raise PlanningError(
+            f"Dataset plan {plan.pointer!r} is not exportable"
+        )
+    if plan.export_validated:
+        if plan.validated_rows is None:
+            raise PlanningError(
+                f"Dataset plan {plan.pointer!r} has no validated export "
+                f"snapshot"
+            )
+        return iter(plan.validated_rows[:limit])
+
+    rows: list[tuple[PreparedValue, ...]] = []
+    for record in plan.records[:limit]:
+        rows.append(
+            tuple(
+                _prepare_value(
+                    _resolve_value(
+                        record,
+                        column.source_path,
+                        plan.flatten,
+                    ),
+                    plan.flatten,
+                )
+                for column in plan.effective_columns
+            )
+        )
+    return iter(rows)
+
+
 def build_plan(
     candidates: Sequence[DatasetCandidate],
     *,

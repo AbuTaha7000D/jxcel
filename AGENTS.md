@@ -4,7 +4,7 @@
 
 `jxcel` is being prepared as a cross-platform Python CLI for converting JSON files into Excel `.xlsx` workbooks. Linux, Windows, and macOS are intended targets. Runtime dependencies are the Python standard library and `openpyxl` only.
 
-The repository is a foundation, not a usable converter. Its `jxcel` command is a temporary bootstrap that reports functionality is not implemented. Do not describe planned features as working.
+Phases 2–6 are implemented in `src/jxcel/`, including the integrated `jxcel` command. Phase 6 is complete and approved after its final QA recheck; do not describe later planned phases or unverified platform compatibility as working.
 
 `ROADMAP.md` is the detailed product specification, decision record, and phase-status handoff. This file defines stable workflow rules. Decision labels mean:
 

@@ -6,6 +6,7 @@ from dataclasses import FrozenInstanceError, replace
 from unittest.mock import patch
 
 from jxcel.discovery import DatasetCandidate
+from jxcel import planning as planning_module
 from jxcel.planning import (
     EXCEL_MAX_CELL_UTF16_UNITS,
     WARNING_SAMPLE_LIMIT,
@@ -17,6 +18,7 @@ from jxcel.planning import (
     encode_column_path,
     parse_column_mapping,
     prepared_rows,
+    preview_rows,
 )
 
 
@@ -1230,6 +1232,91 @@ class PlanModelTests(unittest.TestCase):
         self.assertEqual(empty.non_exportable_reason, "zero_columns")
         self.assertFalse(empty.exportable)
         self.assertEqual(empty.warnings, ())
+
+
+class PreviewRowsTests(unittest.TestCase):
+    def test_schema_plan_yields_only_the_requested_bound(self):
+        plan = build_one(
+            [{"x": 1}, {"x": 2}, {"x": 3}],
+            validation_mode="schema",
+        )
+
+        rows = list(preview_rows(plan, 2))
+
+        self.assertEqual(
+            [[value.value for value in row] for row in rows],
+            [[1], [2]],
+        )
+
+    def test_schema_plan_limit_can_cover_all_rows_or_none(self):
+        plan = build_one(
+            [{"x": 1}, {"x": 2}],
+            validation_mode="schema",
+        )
+
+        self.assertEqual(len(list(preview_rows(plan, 10))), 2)
+        self.assertEqual(list(preview_rows(plan, 0)), [])
+
+    def test_negative_limit_is_rejected(self):
+        plan = build_one([{"x": 1}], validation_mode="schema")
+
+        with self.assertRaises(ValueError):
+            preview_rows(plan, -1)
+
+    def test_schema_plan_prepares_only_rows_in_the_preview_window(self):
+        records = tuple({"x": index} for index in range(4))
+        plan = build_one(records, validation_mode="schema")
+        original = planning_module._prepare_value
+
+        with patch(
+            "jxcel.planning._prepare_value",
+            side_effect=original,
+        ) as prepare:
+            rows = list(preview_rows(plan, 2))
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(prepare.call_count, 2)
+
+    def test_schema_preview_does_not_export_validate_values(self):
+        plan = build_one(
+            [{"x": "bad\u0000value"}],
+            validation_mode="schema",
+        )
+
+        rows = list(preview_rows(plan, 1))
+
+        self.assertEqual(rows[0][0].value, "bad\u0000value")
+
+    def test_export_plan_previews_from_the_immutable_snapshot(self):
+        records = [{"x": 1}, {"x": 2}]
+        plan = build_one(records)
+        records[0]["x"] = 999
+
+        rows = list(preview_rows(plan, 1))
+
+        self.assertEqual(rows[0][0].value, 1)
+
+    def test_missing_export_snapshot_is_rejected(self):
+        plan = build_one([{"x": 1}])
+        forged = replace(plan, validated_rows=None)
+
+        with self.assertRaisesRegex(PlanningError, "no validated export"):
+            preview_rows(forged, 1)
+
+    def test_unselected_plan_is_rejected(self):
+        result = build_plan(
+            [make_dataset("", [{"x": 1}])],
+            selected_pointers=(),
+        )
+
+        with self.assertRaisesRegex(PlanningError, "not selected"):
+            preview_rows(result.datasets[0], 1)
+
+    def test_non_exportable_plan_is_rejected(self):
+        plan = build_one([{}], validation_mode="schema")
+
+        with self.assertRaisesRegex(PlanningError, "not exportable"):
+            preview_rows(plan, 1)
 
 
 if __name__ == "__main__":
