@@ -4,7 +4,7 @@
 
 ## Development status
 
-**The converter is not functional yet.** The repository contains the project specification and a minimal command bootstrap. Strict JSON loading and validation are implemented in `src/jxcel/jsonio.py` (Phase 2), deterministic dataset discovery is implemented in `src/jxcel/discovery.py` (Phase 3), and schema planning and value preparation are implemented in `src/jxcel/planning.py` (Phase 4), but none are integrated into the command. Workbook generation and user-facing conversion options remain unimplemented. The declared command currently reports that the application is not implemented.
+**The converter is not functional yet.** The repository contains the project specification and a minimal command bootstrap. Strict JSON loading and validation (Phase 2), deterministic dataset discovery (Phase 3), schema planning and value preparation (Phase 4), and workbook generation with validated publication (Phase 5) are implemented in `src/jxcel/`, but they are not integrated into the command. User-facing conversion options remain unimplemented. The declared command currently reports that the application is not implemented.
 
 ## Planned capabilities
 
