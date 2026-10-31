@@ -294,6 +294,12 @@ def _selected_plans(
                 f"for export",
                 dataset_pointer=plan.pointer,
             )
+        if plan.validated_rows is None:
+            raise WorkbookError(
+                f"Dataset plan {plan.pointer!r} has no validated export "
+                f"snapshot",
+                dataset_pointer=plan.pointer,
+            )
         if not plan.effective_columns:
             raise WorkbookError(
                 f"Dataset plan {plan.pointer!r} has no effective columns",
@@ -344,7 +350,7 @@ def _display_text(value: PreparedValue) -> str | None:
 
 def _auto_filter_reference(plan: DatasetPlan) -> str:
     last_column = get_column_letter(len(plan.effective_columns))
-    last_row = max(1 + len(plan.records), 1)
+    last_row = max(1 + plan.row_count, 1)
     return f"A1:{last_column}{last_row}"
 
 
@@ -616,7 +622,7 @@ def _validate_workbook(
                     dataset_pointer=plan.pointer,
                     sheet_name=assignment.name,
                 )
-            planned_last_row = 1 + len(plan.records)
+            planned_last_row = 1 + plan.row_count
             if worksheet.max_row > planned_last_row:
                 raise WorkbookError(
                     f"Workbook validation failed for worksheet "
@@ -826,7 +832,7 @@ def export_workbook(
             SheetSummary(
                 pointer=assignment.pointer,
                 name=assignment.name,
-                data_rows=len(plan.records),
+                data_rows=plan.row_count,
                 columns=len(plan.effective_columns),
             )
             for plan, assignment in zip(selected, assignments)

@@ -88,10 +88,30 @@ class DatasetPlan:
     warnings: tuple[PlanningWarning, ...]
     flatten: bool
     export_validated: bool
+    validated_rows: tuple[tuple[PreparedValue, ...], ...] | None = None
 
     @property
     def exportable(self) -> bool:
         return self.non_exportable_reason is None
+
+    @property
+    def row_count(self) -> int:
+        """Return the number of rows represented by this plan's export data.
+
+        Export-validated plans report the length of their immutable
+        validated snapshot. Plans that have not been export-validated
+        report their candidate record count and cannot be exported.
+        An export-validated plan without a snapshot is an invalid state
+        and raises ``PlanningError`` rather than reporting zero rows.
+        """
+        if self.validated_rows is not None:
+            return len(self.validated_rows)
+        if self.export_validated:
+            raise PlanningError(
+                f"Dataset plan {self.pointer!r} has no validated export "
+                f"snapshot"
+            )
+        return len(self.records)
 
 
 @dataclass(frozen=True)
@@ -472,7 +492,12 @@ def _finalize_warnings(
     )
 
 
-def _validate_export_plan(plan: DatasetPlan) -> tuple[PlanningWarning, ...]:
+def _validate_export_plan(
+    plan: DatasetPlan,
+) -> tuple[
+    tuple[PlanningWarning, ...],
+    tuple[tuple[PreparedValue, ...], ...],
+]:
     if len(plan.records) > EXCEL_MAX_DATA_ROWS:
         raise PlanningError(
             f"Dataset {plan.pointer!r} has {len(plan.records)} records, "
@@ -497,8 +522,10 @@ def _validate_export_plan(plan: DatasetPlan) -> tuple[PlanningWarning, ...]:
 
     counts: dict[tuple[WarningCode, str | None], int] = {}
     samples: dict[tuple[WarningCode, str | None], list[int]] = {}
+    validated_rows: list[tuple[PreparedValue, ...]] = []
 
     for record_index, record in enumerate(plan.records):
+        prepared_row: list[PreparedValue] = []
         for column in plan.effective_columns:
             value = _resolve_value(
                 record,
@@ -506,6 +533,7 @@ def _validate_export_plan(plan: DatasetPlan) -> tuple[PlanningWarning, ...]:
                 plan.flatten,
             )
             prepared = _prepare_value(value, plan.flatten)
+            prepared_row.append(prepared)
             if prepared.kind == "text":
                 _validate_text(
                     prepared.value,
@@ -550,36 +578,23 @@ def _validate_export_plan(plan: DatasetPlan) -> tuple[PlanningWarning, ...]:
                         column.name,
                         record_index,
                     )
+        validated_rows.append(tuple(prepared_row))
 
-    return _finalize_warnings(
-        counts,
-        samples,
-        plan.effective_columns,
-        plan.pointer,
+    return (
+        _finalize_warnings(
+            counts,
+            samples,
+            plan.effective_columns,
+            plan.pointer,
+        ),
+        tuple(validated_rows),
     )
-
-
-def _iter_prepared_rows(
-    plan: DatasetPlan,
-) -> Iterator[tuple[PreparedValue, ...]]:
-    for record in plan.records:
-        yield tuple(
-            _prepare_value(
-                _resolve_value(
-                    record,
-                    column.source_path,
-                    plan.flatten,
-                ),
-                plan.flatten,
-            )
-            for column in plan.effective_columns
-        )
 
 
 def prepared_rows(
     plan: DatasetPlan,
 ) -> Iterator[tuple[PreparedValue, ...]]:
-    """Return prepared rows for an export-validated, exportable plan."""
+    """Return the immutable validated snapshot for a selected, exportable plan."""
     if not plan.export_validated:
         raise PlanningError(
             f"Dataset plan {plan.pointer!r} has not been validated for export"
@@ -592,7 +607,11 @@ def prepared_rows(
         raise PlanningError(
             f"Dataset plan {plan.pointer!r} is not exportable"
         )
-    return _iter_prepared_rows(plan)
+    if plan.validated_rows is None:
+        raise PlanningError(
+            f"Dataset plan {plan.pointer!r} has no validated export snapshot"
+        )
+    return iter(plan.validated_rows)
 
 
 def build_plan(
@@ -737,12 +756,13 @@ def build_plan(
             and plan.selected
             and plan.exportable
         ):
-            warnings = _validate_export_plan(plan)
+            warnings, validated_rows = _validate_export_plan(plan)
             final_plans.append(
                 replace(
                     plan,
                     warnings=warnings,
                     export_validated=True,
+                    validated_rows=validated_rows,
                 )
             )
             continue

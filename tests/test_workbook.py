@@ -4,6 +4,7 @@ import stat
 import tempfile
 import unittest
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -514,6 +515,151 @@ class WorkbookContentTests(unittest.TestCase):
             export_workbook([plan], self.output())
         self.assertFalse(self.output().exists())
         self.assertEqual(list(self.directory.glob(".jxcel-*.tmp.xlsx")), [])
+
+
+class ValidatedSnapshotExportTests(unittest.TestCase):
+    def setUp(self):
+        self._temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary_directory.cleanup)
+        self.directory = Path(self._temporary_directory.name)
+
+    def output(self, name="snapshot.xlsx"):
+        return self.directory / name
+
+    def temp_files(self):
+        return sorted(self.directory.glob(".jxcel-*.tmp.xlsx"))
+
+    def data_row(self, path):
+        workbook = load_workbook(path)
+        try:
+            worksheet = workbook[workbook.sheetnames[0]]
+            return [(cell.data_type, cell.value) for cell in worksheet[2]]
+        finally:
+            workbook.close()
+
+    def test_top_level_record_mutation_does_not_publish_new_value(self):
+        plan = make_plan("/data", ({"value": 1.0},))
+
+        plan.records[0]["value"] = 1e308
+
+        output = self.output()
+        export_workbook([plan], output)
+        self.assertEqual(self.data_row(output), [("n", 1.0)])
+
+    def test_nested_dict_mutation_does_not_publish_new_value(self):
+        plan = make_plan("/data", ({"outer": {"value": 1.0}},))
+
+        plan.records[0]["outer"]["value"] = 1e308
+
+        output = self.output()
+        export_workbook([plan], output)
+        self.assertEqual(self.data_row(output), [("n", 1.0)])
+
+    def test_nested_list_mutation_does_not_publish_new_value(self):
+        plan = make_plan("/data", ({"values": [1, 2]},))
+
+        values = plan.records[0]["values"]
+        values.append(3)
+        values[0] = 1e308
+
+        output = self.output()
+        export_workbook([plan], output)
+        self.assertEqual(self.data_row(output), [("s", "[1,2]")])
+
+    def test_out_of_range_mutation_cannot_be_published(self):
+        plan = make_plan("/data", ({"value": 1.0},))
+        plan.records[0]["value"] = 1e308
+
+        output = self.output()
+        export_workbook([plan], output)
+
+        cells = self.data_row(output)
+        self.assertEqual(cells, [("n", 1.0)])
+        self.assertNotIn(1e308, [value for _, value in cells])
+
+    def test_validated_plan_without_snapshot_fails_before_publication(self):
+        plan = replace(make_plan("/data", ({"a": 1},)), validated_rows=None)
+        output = self.output()
+
+        with self.assertRaisesRegex(
+            WorkbookError,
+            "no validated export snapshot",
+        ):
+            export_workbook([plan], output)
+
+        self.assertFalse(output.exists())
+        self.assertEqual(self.temp_files(), [])
+
+    def test_normal_export_preserves_types_and_values(self):
+        plan = make_plan(
+            "/data",
+            (
+                {
+                    "i": 1,
+                    "f": 1.5,
+                    "b": True,
+                    "n": None,
+                    "s": "text",
+                    "big": 10**15,
+                    "items": [1, 2],
+                },
+            ),
+        )
+        output = self.output()
+
+        export_workbook([plan], output)
+
+        workbook = load_workbook(output)
+        try:
+            worksheet = workbook["data"]
+            self.assertEqual(worksheet["A2"].value, 1)
+            self.assertEqual(worksheet["A2"].data_type, "n")
+            self.assertEqual(worksheet["B2"].value, 1.5)
+            self.assertEqual(worksheet["B2"].data_type, "n")
+            self.assertIs(worksheet["C2"].value, True)
+            self.assertEqual(worksheet["C2"].data_type, "b")
+            self.assertIsNone(worksheet["D2"].value)
+            self.assertEqual(worksheet["E2"].value, "text")
+            self.assertEqual(worksheet["E2"].data_type, "s")
+            self.assertEqual(worksheet["F2"].value, str(10**15))
+            self.assertEqual(worksheet["F2"].data_type, "s")
+            self.assertEqual(worksheet["G2"].value, "[1,2]")
+            self.assertEqual(worksheet["G2"].data_type, "s")
+        finally:
+            workbook.close()
+
+    def test_dimensions_and_summary_use_snapshot_row_count(self):
+        plan = make_plan("/data", ({"a": 1}, {"a": 2}, {"a": 3}))
+        changed = replace(plan, records=())
+
+        output = self.output()
+        result = export_workbook([changed], output)
+
+        self.assertEqual(result.sheets[0].data_rows, 3)
+        workbook = load_workbook(output)
+        try:
+            worksheet = workbook["data"]
+            self.assertEqual(worksheet.max_row, 4)
+            self.assertEqual(worksheet.auto_filter.ref, "A1:A4")
+            self.assertEqual(
+                [worksheet.cell(row=row, column=1).value for row in (2, 3, 4)],
+                [1, 2, 3],
+            )
+        finally:
+            workbook.close()
+
+    def test_zero_row_dataset_fails_before_creating_files(self):
+        plan = make_plan("/data", ())
+        output = self.output()
+
+        with self.assertRaisesRegex(
+            WorkbookError,
+            "No selected exportable datasets",
+        ):
+            export_workbook([plan], output)
+
+        self.assertFalse(output.exists())
+        self.assertEqual(self.temp_files(), [])
 
 
 class WorkbookValidationTests(unittest.TestCase):

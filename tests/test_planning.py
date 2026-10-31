@@ -2,7 +2,7 @@ import copy
 import json
 import math
 import unittest
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from unittest.mock import patch
 
 from jxcel.discovery import DatasetCandidate
@@ -1044,10 +1044,163 @@ class PreparedRowTests(unittest.TestCase):
         with self.assertRaises(PlanningError):
             prepared_rows(plan)
 
-    def test_validated_plan_with_no_records_yields_no_rows(self):
+    def test_validated_snapshot_remains_authoritative_when_records_are_replaced(self):
         plan = replace(build_one([{"x": 1}]), records=())
 
-        self.assertEqual(list(prepared_rows(plan)), [])
+        self.assertEqual(
+            list(prepared_rows(plan)),
+            [(PreparedValue(1, "integer"),)],
+        )
+        self.assertEqual(plan.row_count, 1)
+
+
+class ValidatedSnapshotTests(unittest.TestCase):
+    def test_top_level_record_mutation_does_not_change_prepared_rows(self):
+        plan = build_one([{"value": 1.0}])
+
+        plan.records[0]["value"] = 1e308
+
+        self.assertEqual(row_values(plan), [(1.0,)])
+
+    def test_nested_dict_mutation_does_not_change_prepared_rows(self):
+        plan = build_one([{"outer": {"value": 1.0}}])
+
+        plan.records[0]["outer"]["value"] = 1e308
+
+        self.assertEqual(row_values(plan), [(1.0,)])
+
+    def test_nested_list_mutation_does_not_change_prepared_rows(self):
+        plan = build_one([{"values": [1, 2]}])
+
+        values = plan.records[0]["values"]
+        values.append(3)
+        values[0] = 1e308
+
+        self.assertEqual(row_values(plan), [("[1,2]",)])
+
+    def test_mutation_through_plan_records_cannot_change_export_data(self):
+        records = [{"value": 1.0}]
+        plan = build_one(records)
+
+        self.assertIs(plan.records[0], records[0])
+        plan.records[0]["value"] = 1e308
+
+        self.assertEqual(records[0]["value"], 1e308)
+        self.assertEqual(row_values(plan), [(1.0,)])
+
+    def test_validated_snapshot_is_deeply_immutable(self):
+        plan = build_one([{"value": 1.0}, {"value": 2.0}])
+
+        self.assertIsInstance(plan.validated_rows, tuple)
+        rows = plan.validated_rows
+        self.assertIsInstance(rows[0], tuple)
+        with self.assertRaises(FrozenInstanceError):
+            rows[0][0].value = 3.0
+        with self.assertRaises(TypeError):
+            rows[0][0] = PreparedValue(3.0, "float")
+
+    def test_replacing_records_does_not_change_validated_rows(self):
+        plan = build_one([{"x": 1}])
+
+        changed = replace(plan, records=({"x": 1e308},))
+
+        self.assertEqual(row_values(changed), [(1,)])
+        self.assertEqual(changed.row_count, 1)
+
+    def test_export_validated_plan_without_snapshot_fails_safely(self):
+        plan = replace(build_one([{"x": 1}]), validated_rows=None)
+
+        with self.assertRaisesRegex(
+            PlanningError,
+            "no validated export snapshot",
+        ):
+            prepared_rows(plan)
+        with self.assertRaisesRegex(
+            PlanningError,
+            "no validated export snapshot",
+        ):
+            _ = plan.row_count
+
+    def test_snapshot_preserves_prepared_kinds_and_values(self):
+        plan = build_one(
+            [
+                {
+                    "text": "a",
+                    "number": 2,
+                    "float": 2.5,
+                    "flag": False,
+                    "blank": None,
+                    "big": 10**15,
+                    "items": [1, 2],
+                }
+            ]
+        )
+
+        self.assertEqual(
+            list(prepared_rows(plan))[0],
+            (
+                PreparedValue("a", "text"),
+                PreparedValue(2, "integer"),
+                PreparedValue(2.5, "float"),
+                PreparedValue(False, "boolean"),
+                PreparedValue(None, "blank"),
+                PreparedValue(str(10**15), "text"),
+                PreparedValue("[1,2]", "text"),
+            ),
+        )
+
+    def test_warnings_are_unchanged_by_post_plan_mutation(self):
+        plan = build_one(
+            [
+                {
+                    "big": 10**15,
+                    "number": 1.234567890123456,
+                    "items": [1],
+                }
+            ]
+        )
+        original_warnings = plan.warnings
+
+        plan.records[0]["big"] = 1
+        plan.records[0]["number"] = 1.0
+        plan.records[0]["items"].append(2)
+
+        self.assertEqual(
+            warnings_for(plan),
+            [
+                ("integer_precision_as_text", "big"),
+                ("float_precision_limited", "number"),
+                ("nested_value_as_json_text", "items"),
+            ],
+        )
+        self.assertEqual(plan.warnings, original_warnings)
+        self.assertEqual(
+            [warning.occurrence_count for warning in plan.warnings],
+            [1, 1, 1],
+        )
+        self.assertEqual(
+            [warning.sample_record_indexes for warning in plan.warnings],
+            [(0,), (0,), (0,)],
+        )
+
+    def test_row_count_uses_snapshot_for_export_plans(self):
+        plan = build_one([{"x": 1}, {"x": 2}, {"x": 3}])
+
+        self.assertEqual(plan.row_count, 3)
+        self.assertEqual(plan.row_count, len(plan.validated_rows))
+
+    def test_zero_record_dataset_has_no_snapshot(self):
+        plan = build_one([])
+
+        self.assertEqual(plan.row_count, 0)
+        self.assertIsNone(plan.validated_rows)
+        self.assertFalse(plan.export_validated)
+
+    def test_schema_only_plan_has_no_snapshot_and_uses_record_count(self):
+        plan = build_one([{"x": 1}, {"x": 2}], validation_mode="schema")
+
+        self.assertEqual(plan.row_count, 2)
+        self.assertIsNone(plan.validated_rows)
 
 
 class PlanModelTests(unittest.TestCase):
