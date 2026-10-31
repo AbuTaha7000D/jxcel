@@ -56,7 +56,7 @@ Use JSON Pointer as the canonical dataset identifier. Escape each key segment wi
 
 The schema is the union of properties across all records. Order columns by first occurrence as records are traversed, and within each record by original object key order. Missing properties and explicit `null` both produce blank cells. Do not silently overwrite fields or values.
 
-Nested objects flatten by default using the jxcel-specific scheme below. With `--no-flatten`, each top-level property in a dataset record is one column. A nested object is serialized as compact JSON text in the cell for its parent property; its child properties never become columns. No partial or recursive flattening occurs. Empty nested objects serialize as `{}`. Nested arrays serialize as compact JSON text. Missing properties and explicit `null` values continue to produce blank cells. Do not expand nested arrays into rows or worksheets.
+Nested objects flatten by default using the jxcel-specific scheme below. With `--no-flatten`, each top-level property in a dataset record is one column. A nested object is serialized as compact JSON text in the cell for its parent property; its child properties never become columns. No partial or recursive flattening occurs. Empty nested objects serialize as `{}`. Nested arrays serialize as compact JSON text. Missing properties and explicit `null` values continue to produce blank cells. Do not expand nested arrays into rows or worksheets. With flattening enabled, an empty nested object contributes no column and is not serialized.
 
 For example, given `[{"id":1,"user":{"name":"Ada"},"tags":["math","art"],"extra":{}}]`, `--no-flatten` produces columns `id`, `user`, `tags`, `extra`. Representative cells are `1`, `{"name":"Ada"}`, `["math","art"]`, and `{}`. In this mode, column mappings refer to these planned top-level names. Without `--no-flatten`, nested object properties follow the flattened-column rules below, and column mappings use the resulting flattened names.
 
@@ -78,19 +78,29 @@ After global validation, compute effective columns for each selected, exportable
 2. If inclusion mappings exist, start with only those mapped columns.
 3. Apply exclusions afterward; exclusions take precedence.
 
+Effective columns retain planned schema order regardless of mapping-argument order. If an include/exclude combination leaves a selected dataset with zero effective columns, mark it non-exportable with reason `no_effective_columns` and skip it; do not create an empty worksheet.
+
 Reject malformed pairs, unknown pointers, and unknown columns during global validation. Repeated identical mappings are idempotent; a column present in both include and exclude mappings is valid and excluded because exclusions take precedence.
 
 Mappings apply independently across datasets. The CLI uses shell-specific quoting; examples appear in Section 3.
 
 ### 2.6 Data preservation
 
-Preserve strings as strings; do not reinterpret date-like or numeric-looking strings. Preserve booleans, safe integers and floating-point values, blanks for null/missing, and Unicode including Arabic. Integers exceeding Excel's reliable 15-digit precision must be written as text with a warning. Nested arrays/objects represented as JSON text must use deterministic compact JSON serialization. Any transformation or precision-preservation choice must be reported. Invalid numeric values are rejected during loading.
+Preserve strings as strings; do not reinterpret date-like or numeric-looking strings. Preserve booleans, safe integers and floating-point values, blanks for null/missing, and Unicode including Arabic. Integers with absolute value at least `10**15` are written as text with a warning; smaller integers remain numeric. Floats remain numeric and are never rounded or rewritten. Warn when a float's shortest round-tripping decimal representation has more than 15 significant digits. A nonzero float whose magnitude is outside Excel's documented numeric range (greater than `9.99999999999999E+307`, or below `2.2250738585072014E-308`) is a fatal planning error.
+
+Nested arrays/objects represented as JSON text use deterministic compact serialization: compact separators, no ASCII escaping of valid Unicode, source key order, and no non-standard numeric constants. Any transformation or precision-preservation choice must be reported. Invalid numeric values are rejected during loading.
+
+Forbidden XML 1.0 control characters (`U+0000`–`U+0008`, `U+000B`, `U+000C`, `U+000E`–`U+001F`), lone UTF-16 surrogate code points, and `U+FFFE`/`U+FFFF` are fatal in selected effective cell values and headers. Never replace, strip, or drop them. Tab, line feed, carriage return, C1 controls, Arabic, and valid supplementary-plane characters are preserved. Cell text is limited to 32,767 UTF-16 code units; supplementary-plane characters count as two units.
+
+Schema-only validation (`--list`) builds schemas, counts, non-exportable status, and mapping validation without scanning cell values for exportability. Full export validation (`--dry-run` and conversion) also checks rows, effective columns, headers, cell length, invalid characters, and numeric range. Limit and representability violations in selected effective data are fatal; excluded columns and unselected datasets do not trigger value-level export errors.
 
 Formula-like strings must remain text and must never become formulas. Implement and test a safe value-writing policy without altering the visible source text unnecessarily. If Excel cannot represent a value within its limits, fail clearly; do not truncate or silently omit it.
 
 ### 2.7 Reporting
 
 Report exported datasets, non-exportable dataset candidates, unsupported structures, warnings, data-preservation decisions, output path, and validation results. `--quiet` may reduce routine success output but must not suppress errors or important data-loss warnings.
+
+Aggregate warnings by warning code, dataset, and effective column. Store an occurrence count and at most five representative record indexes; dataset-level warnings have no column. Order warnings by dataset discovery order, then effective column order with dataset-level warnings first, then warning code. Do not store one warning object per value occurrence.
 
 Unsupported-structure findings remain visible even if the user selects only certain datasets.
 
@@ -209,7 +219,7 @@ JSON Pointer escaping: a property key `a/b~c` is addressed as `/a~1b~0c`. Preser
 
 Create one worksheet per exportable selected dataset. Sanitize names to Excel's worksheet naming rules and resolve collisions deterministically (for example with stable numeric suffixes); preserve mapping from dataset pointer to final sheet name in the plan/report. Use formatted headers, freeze the header row, auto filters, and bounded width calculation. Use normal openpyxl workbook mode initially. Do not introduce write-only mode absent measured performance evidence.
 
-Before writing, enforce Excel worksheet limits: 1,048,576 rows including the header, 16,384 columns, and 32,767 characters per cell. Excel numeric precision is 15 digits. Reject oversized data clearly; do not truncate, drop columns, or split across sheets. Formula-like values must be emitted as text. Validate the saved temporary workbook before publication.
+Before writing, enforce Excel worksheet limits: 1,048,576 rows including the header, 16,384 effective columns, and 32,767 UTF-16 code units per cell (supplementary-plane characters count as two units). Excel numeric precision is 15 digits. Reject oversized data clearly; do not truncate, drop columns, or split across sheets. Limit and representability violations in selected effective data are fatal; excluded columns and unselected datasets do not trigger value-level export errors. Selected datasets with zero planned or zero effective columns are non-exportable and are skipped without creating a worksheet. Formula-like values must be emitted as text. Validate the saved temporary workbook before publication.
 
 ## 7. Safe output publication
 
@@ -259,7 +269,7 @@ Each phase requires explicit user authorization. Completion of a phase does not 
 
 ### Phase 3 — Dataset Discovery
 
-**Status: NOT STARTED.** The next authorized activity is read-only Phase 3 analysis; implementation requires explicit user approval.
+**Status: COMPLETED and approved by the user.** Independent QA passed. `discover()` in `src/jxcel/discovery.py` returns an ordered tuple of `DatasetCandidate` and `StructureFinding` values using the approved precedence and iterative pre-order traversal. Focused discovery tests (22) and the full available suite (47) pass on Linux with Python 3.14.8. No CLI integration, schema planning, or workbook behavior is included.
 
 1. **Objective:** discover dataset candidates and unsupported structures deterministically.
 2. **Scope:** pointer traversal, classification, boundary, findings.
@@ -274,6 +284,8 @@ Each phase requires explicit user authorization. Completion of a phase does not 
 11. **Later dependencies:** planning consumes discovered candidate pointers and records.
 
 ### Phase 4 — Schema Planning and Transformation
+
+**Status: IMPLEMENTED — awaiting user approval.** `build_plan()` and `prepared_rows()` are implemented in `src/jxcel/planning.py` with approved schema inference, flattening, mapping, validation-mode, warning, and limit behavior. Focused planning tests (88) and the full available suite (135) pass on Linux with Python 3.14.8. Independent QA passed. The CLI remains unintegrated and no workbook is written.
 
 1. **Objective:** determine deterministic columns and safe cell values.
 2. **Scope:** schema union/order, flattening, column maps, serialization, constraints.
@@ -455,6 +467,18 @@ The project is designed for those operating systems; it is not yet verified on a
 | Primitive root is valid JSON but unsupported for export | Approved | Loader accepts it; discovery reports `unsupported_root` at `""`; list/dry-run expose it; conversion fails if no exportable dataset exists. |
 | JSON real numbers use finite Python-float range in Phase 2 | Approved | Reject overflow to non-finite float and nonzero-to-zero underflow as unsupported numeric range, not malformed JSON; preserve ordinary float behavior and defer Excel-specific limits to planning/export. |
 | Python's active integer-string conversion limit is respected | Approved | Integer tokens use Python's normal conversion; over-limit tokens fail with a path-aware integer-conversion error. jxcel does not change or disable the interpreter-wide limit. |
+| Integers at or above `10**15` become text | Approved | Preserves precision beyond Excel's reliable 15 digits and reports a warning; smaller integers remain numeric. |
+| Floats remain numeric with precision and range checks | Approved | Warn when the shortest round-tripping decimal has more than 15 significant digits; fatally reject nonzero magnitudes outside Excel's documented numeric range; never round or rewrite values. |
+| Effective columns follow planned schema order | Approved | Mapping arguments do not reorder columns; only inclusion and exclusion change membership. |
+| Zero effective columns make a selected dataset non-exportable | Approved | Skip with reason `no_effective_columns` and report a warning; never create an empty worksheet. |
+| Selected effective values fail fatally; excluded and unselected values are not validated | Approved | Limit, character, and numeric-range violations are data-integrity failures only for data the operation would write. |
+| Schema-only and full export validation are distinct | Approved | `--list` performs schema and mapping validation only; `--dry-run` and conversion perform full value and limit validation; `prepared_rows()` rejects schema-only plans. |
+| Nested JSON uses deterministic compact serialization | Approved | Compact separators, unescaped valid Unicode, source key order, and no non-standard numeric constants. |
+| Warnings are aggregated by code, dataset, and column | Approved | Bounded sample record indexes and deterministic ordering prevent per-cell warning explosion while preserving reporting context. |
+| Invalid Excel characters are fatal | Approved | Forbidden XML controls, lone surrogates, and `U+FFFE`/`U+FFFF` fail clearly without silent replacement; valid Arabic and supplementary-plane Unicode are preserved. |
+| Excel limits use effective scope and UTF-16 units | Approved | Check rows, effective columns, headers, and cells; cell text is limited to 32,767 UTF-16 code units with supplementary-plane characters counted as two. |
+| Empty planned column names are preserved | Approved | Do not synthesize labels or discard columns for empty JSON keys. |
+| Empty nested objects produce no flattened column | Approved | Flattening omits them; `--no-flatten` serializes `{}` in the parent column as specified. |
 | Test/lint/format/type-check tooling beyond `unittest` | Open | No extra tooling selected; do not invent commands. |
 | Default preview row count and verbose/quiet interaction | Open | Must be finalized during CLI phase before implementation. |
 
@@ -468,4 +492,4 @@ Once functional, recommend isolated installation with `pipx`: for a published di
 
 ## 15. Current status and next phase
 
-Current status: Phase 2 JSON loading and validation is **COMPLETED and approved by the user**. Its focused and full available test suites passed (25 tests), and independent QA passed. Phase 3 — Dataset Discovery is **NOT STARTED**. The next authorized activity is Phase 3 read-only analysis; implementation requires explicit user approval. The CLI remains a temporary bootstrap and the overall converter is not functional yet.
+Current status: Phase 2 JSON loading and validation is **COMPLETED and approved by the user**. Its focused and full available test suites passed (25 tests), and independent QA passed. Phase 3 — Dataset Discovery is **COMPLETED and approved by the user**: `discover()` is implemented in `src/jxcel/discovery.py`, focused discovery tests (22) and the full available suite (47) passed on Linux with Python 3.14.8, and independent QA passed. Phase 4 — Schema Planning and Transformation is **IMPLEMENTED and awaiting user approval**: planning is implemented in `src/jxcel/planning.py`, focused planning tests (88) and the full available suite (135) pass on Linux with Python 3.14.8, and independent QA passed. Phase 5 — Excel Workbook Generation is **NOT STARTED**. The CLI remains a temporary bootstrap and the overall converter is not functional yet.
