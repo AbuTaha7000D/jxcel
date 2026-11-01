@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import load_workbook
 
@@ -759,6 +760,89 @@ class ConversionTests(CliTestCase):
 
 
 class EndToEndTests(CliTestCase):
+    def test_broken_stderr_during_error_reporting_returns_failure(self):
+        path = self.root / "missing.json"
+
+        class BrokenPipeStream:
+            def write(self, _text):
+                raise BrokenPipeError
+
+        with patch("jxcel.cli.sys.stderr", BrokenPipeStream()):
+            self.assertEqual(main([str(path)]), 1)
+
+    def test_unicode_report_escapes_characters_for_ascii_console(self):
+        path = self.write_json({"data": [{"café": "été"}]})
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = (
+            str(SRC_DIR)
+            if not environment.get("PYTHONPATH")
+            else str(SRC_DIR) + os.pathsep + environment["PYTHONPATH"]
+        )
+        environment["PYTHONIOENCODING"] = "ascii:strict"
+
+        completed = subprocess.run(
+            [sys.executable, "-m", "jxcel.cli", str(path), "--list"],
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=120,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn(r"caf\xe9", completed.stdout)
+        self.assertNotIn("UnicodeEncodeError", completed.stderr)
+        self.assertNotIn("Traceback", completed.stderr)
+
+        missing = self.root / "missing café.json"
+        failed = subprocess.run(
+            [sys.executable, "-m", "jxcel.cli", str(missing)],
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=120,
+        )
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn(r"caf\xe9", failed.stderr)
+        self.assertNotIn("UnicodeEncodeError", failed.stderr)
+        self.assertNotIn("Traceback", failed.stderr)
+
+    def test_closed_stdout_pipe_returns_failure_without_traceback(self):
+        data = {
+            f"dataset_{index}": [{"value": index}]
+            for index in range(3000)
+        }
+        path = self.write_json(data)
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = (
+            str(SRC_DIR)
+            if not environment.get("PYTHONPATH")
+            else str(SRC_DIR) + os.pathsep + environment["PYTHONPATH"]
+        )
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        process = subprocess.Popen(
+            [sys.executable, "-m", "jxcel.cli", str(path), "--list"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
+        self.addCleanup(
+            lambda: process.kill() if process.poll() is None else None
+        )
+
+        self.assertIsNotNone(process.stdout)
+        self.assertIsNotNone(process.stderr)
+        first_byte = process.stdout.read(1)
+        process.stdout.close()
+        stderr = process.stderr.read().decode("utf-8", errors="replace")
+        process.stderr.close()
+        return_code = process.wait(timeout=120)
+
+        self.assertTrue(first_byte)
+        self.assertEqual(return_code, 1)
+        self.assertNotIn("Traceback", stderr)
+        self.assertNotIn("BrokenPipeError", stderr)
+        self.assertNotIn("Exception ignored", stderr)
+
     def test_module_entry_point_process_exit_codes(self):
         path = self.write_json(SAMPLE)
         output = self.root / "result.xlsx"

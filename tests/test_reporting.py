@@ -120,6 +120,20 @@ class ListingTests(unittest.TestCase):
             rendered.index("'/a': mixed_array"),
         )
 
+    def test_listing_reports_scalar_and_empty_object_pointers_deterministically(self):
+        findings = (
+            StructureFinding(pointer="/meta/version", kind="scalar_value"),
+            StructureFinding(pointer="/meta/blank", kind="empty_object"),
+        )
+
+        rendered = render_listing((), findings)
+
+        self.assertIn("Unsupported findings: 2", rendered)
+        self.assertLess(
+            rendered.index("'/meta/version': scalar_value"),
+            rendered.index("'/meta/blank': empty_object"),
+        )
+
 
 class PreviewRenderingTests(unittest.TestCase):
     def test_preview_renders_typed_cells_and_quotes_pipes(self):

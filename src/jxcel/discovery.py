@@ -12,6 +12,8 @@ StructureKind = Literal[
     "nested_array",
     "primitive_array",
     "unsupported_root",
+    "scalar_value",
+    "empty_object",
 ]
 
 
@@ -77,18 +79,37 @@ def discover(document: object) -> tuple[Finding, ...]:
         return (StructureFinding(pointer="", kind="unsupported_root"),)
 
     findings: list[Finding] = []
-    stack: list[tuple[object, str]] = [(document, "")]
+    # The boolean tracks whether an ancestor unsupported-array finding already
+    # accounts for values in this branch. Continue traversing those branches to
+    # find independent arrays/datasets, but avoid redundant scalar/object
+    # findings beneath the array finding.
+    stack: list[tuple[object, str, bool]] = [(document, "", False)]
 
     while stack:
-        value, pointer = stack.pop()
+        value, pointer, covered_by_array_finding = stack.pop()
 
         if isinstance(value, dict):
+            if not value:
+                if not covered_by_array_finding:
+                    findings.append(
+                        StructureFinding(pointer=pointer, kind="empty_object")
+                    )
+                continue
             for key, child in reversed(list(value.items())):
-                stack.append((child, _object_child_pointer(pointer, key)))
+                stack.append(
+                    (
+                        child,
+                        _object_child_pointer(pointer, key),
+                        covered_by_array_finding,
+                    )
+                )
             continue
 
         if not isinstance(value, list):
-            # Scalar values outside the root never produce findings.
+            if not covered_by_array_finding:
+                findings.append(
+                    StructureFinding(pointer=pointer, kind="scalar_value")
+                )
             continue
 
         kind = _classify_array(value)
@@ -98,6 +119,12 @@ def discover(document: object) -> tuple[Finding, ...]:
 
         findings.append(StructureFinding(pointer=pointer, kind=kind))
         for index in range(len(value) - 1, -1, -1):
-            stack.append((value[index], _array_child_pointer(pointer, index)))
+            stack.append(
+                (
+                    value[index],
+                    _array_child_pointer(pointer, index),
+                    True,
+                )
+            )
 
     return tuple(findings)

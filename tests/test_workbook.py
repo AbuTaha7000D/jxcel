@@ -1048,6 +1048,26 @@ class PublicationTests(unittest.TestCase):
         self.assertFalse(output.exists())
         self.assertEqual(self.temp_files(), [])
 
+    def test_interrupt_while_closing_new_temp_file_cleans_temp(self):
+        output = self.output()
+        real_close = os.close
+        close_calls = 0
+
+        def interrupt_once(descriptor):
+            nonlocal close_calls
+            close_calls += 1
+            if close_calls == 1:
+                raise KeyboardInterrupt
+            return real_close(descriptor)
+
+        with patch("jxcel.workbook.os.close", side_effect=interrupt_once):
+            with self.assertRaises(KeyboardInterrupt):
+                export_workbook([self.plan], output)
+
+        self.assertEqual(close_calls, 2)
+        self.assertFalse(output.exists())
+        self.assertEqual(self.temp_files(), [])
+
     def test_write_failure_cleans_temp_and_preserves_output(self):
         output = self.output()
         output.write_bytes(b"old content")
@@ -1086,6 +1106,28 @@ class PublicationTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(WorkbookError, "validation failed"):
                 export_workbook([self.plan], output, overwrite=True)
+        self.assertEqual(output.read_bytes(), b"old content")
+        self.assertEqual(self.temp_files(), [])
+
+    def test_corrupt_saved_workbook_fails_validation_and_preserves_output(self):
+        output = self.output()
+        output.write_bytes(b"old content")
+
+        def write_corrupt_workbook(_workbook, path):
+            Path(path).write_bytes(b"not a valid xlsx archive")
+
+        with patch.object(
+            workbook_module.Workbook,
+            "save",
+            autospec=True,
+            side_effect=write_corrupt_workbook,
+        ):
+            with self.assertRaisesRegex(
+                WorkbookError,
+                "Could not reopen generated workbook",
+            ):
+                export_workbook([self.plan], output, overwrite=True)
+
         self.assertEqual(output.read_bytes(), b"old content")
         self.assertEqual(self.temp_files(), [])
 

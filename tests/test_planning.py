@@ -178,6 +178,115 @@ class SchemaTests(unittest.TestCase):
         plan = build_one([{"id": 1, "extra": {}}])
 
         self.assertEqual([column.name for column in plan.columns], ["id"])
+        warning = next(
+            warning
+            for warning in plan.warnings
+            if warning.code == "empty_object_omitted"
+        )
+        self.assertEqual(warning.column, "extra")
+        self.assertEqual(warning.occurrence_count, 1)
+        self.assertEqual(warning.sample_record_indexes, (0,))
+
+    def test_empty_nested_objects_aggregate_across_records_with_samples(self):
+        records = [
+            {"id": index, "outer": {"empty": {}, "value": index}}
+            for index in range(WARNING_SAMPLE_LIMIT + 2)
+        ]
+
+        plan = build_one(records)
+
+        omitted = [
+            warning
+            for warning in plan.warnings
+            if warning.code == "empty_object_omitted"
+        ]
+        self.assertEqual(len(omitted), 1)
+        self.assertEqual(omitted[0].column, "outer.empty")
+        self.assertEqual(omitted[0].occurrence_count, len(records))
+        self.assertEqual(
+            omitted[0].sample_record_indexes,
+            tuple(range(WARNING_SAMPLE_LIMIT)),
+        )
+
+    def test_multiple_empty_objects_have_distinct_deterministic_warnings(self):
+        plan = build_one(
+            [{"id": 1, "z": {}, "outer": {"a": {}}}]
+        )
+
+        self.assertEqual(
+            warnings_for(plan),
+            [
+                ("empty_object_omitted", "z"),
+                ("empty_object_omitted", "outer.a"),
+            ],
+        )
+
+    def test_no_flatten_does_not_warn_that_empty_objects_were_omitted(self):
+        plan = build_one(
+            [{"id": 1, "extra": {}}],
+            flatten=False,
+        )
+
+        self.assertEqual([column.name for column in plan.columns], ["id", "extra"])
+        self.assertEqual(row_values(plan), [(1, "{}")])
+        self.assertNotIn(
+            "empty_object_omitted",
+            [warning.code for warning in plan.warnings],
+        )
+
+    def test_empty_objects_inside_arrays_are_preserved_without_omission_warning(self):
+        plan = build_one(
+            [{"id": 1, "items": [{"empty": {}}]}],
+        )
+
+        self.assertEqual([column.name for column in plan.columns], ["id", "items"])
+        self.assertEqual(row_values(plan)[0][1], '[{"empty":{}}]')
+        self.assertNotIn(
+            "empty_object_omitted",
+            [warning.code for warning in plan.warnings],
+        )
+
+    def test_empty_object_warnings_follow_selection_and_mapping_scope(self):
+        candidates = [
+            make_dataset(
+                "/selected",
+                [{"id": 1, "omitted": {}}, {"id": 2, "omitted": {}}],
+            ),
+            make_dataset("/unselected", [{"id": 3, "omitted": {}}]),
+        ]
+
+        result = build_plan(
+            candidates,
+            selected_pointers=("/selected",),
+            include_maps=('["/selected","id"]',),
+        )
+
+        selected, unselected = result.datasets
+        selected_warnings = [
+            warning
+            for warning in selected.warnings
+            if warning.code == "empty_object_omitted"
+        ]
+        self.assertEqual(len(selected_warnings), 1)
+        self.assertEqual(selected_warnings[0].column, "omitted")
+        self.assertEqual(selected_warnings[0].occurrence_count, 2)
+        self.assertEqual(selected_warnings[0].sample_record_indexes, (0, 1))
+        self.assertFalse(unselected.selected)
+        self.assertFalse(
+            any(
+                warning.code == "empty_object_omitted"
+                for warning in unselected.warnings
+            )
+        )
+
+    def test_non_exportable_all_empty_records_use_skip_warning_only(self):
+        plan = build_one([{"empty": {}}, {"empty": {}}])
+
+        self.assertFalse(plan.exportable)
+        self.assertEqual(
+            warnings_for(plan),
+            [("dataset_skipped_zero_columns", None)],
+        )
 
     def test_all_empty_objects_produce_zero_columns(self):
         plan = build_one([{}, {}])

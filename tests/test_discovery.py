@@ -69,10 +69,75 @@ class DiscoveryTests(unittest.TestCase):
 
         self.assertEqual(pairs(findings), [("dataset", "/data")])
 
-    def test_root_objects_without_arrays_have_no_findings(self):
-        for document in ({}, {"a": 1}, {"a": {"b": 2}}, {"a": {}}):
+    def test_object_container_reports_scalar_values_and_empty_objects(self):
+        cases = (
+            ({}, [("empty_object", "")]),
+            ({"a": 1}, [("scalar_value", "/a")]),
+            ({"a": {"b": 2}}, [("scalar_value", "/a/b")]),
+            ({"a": {}}, [("empty_object", "/a")]),
+        )
+        for document, expected in cases:
             with self.subTest(document=document):
-                self.assertEqual(discover(document), ())
+                self.assertEqual(pairs(discover(document)), expected)
+
+    def test_root_mixed_data_is_reported_in_deterministic_preorder(self):
+        document = {
+            "metadata": {"version": 1, "empty": {}},
+            "items": [{"id": 1}],
+            "enabled": True,
+        }
+
+        self.assertEqual(
+            pairs(discover(document)),
+            [
+                ("scalar_value", "/metadata/version"),
+                ("empty_object", "/metadata/empty"),
+                ("dataset", "/items"),
+                ("scalar_value", "/enabled"),
+            ],
+        )
+
+    def test_nested_object_findings_use_escaped_json_pointers(self):
+        document = {"metadata": {"a/b~c": {"leaf": "value"}}}
+
+        self.assertEqual(
+            pairs(discover(document)),
+            [("scalar_value", "/metadata/a~1b~0c/leaf")],
+        )
+
+    def test_unsupported_array_covers_descendant_scalars_and_empty_objects(self):
+        document = {
+            "mixed": [
+                {"metadata": {"version": 1}, "empty": {}},
+                "primitive",
+            ],
+            "outside": 2,
+        }
+
+        self.assertEqual(
+            pairs(discover(document)),
+            [
+                ("mixed_array", "/mixed"),
+                ("scalar_value", "/outside"),
+            ],
+        )
+
+    def test_dataset_boundary_does_not_emit_nested_value_findings(self):
+        document = {
+            "data": [
+                {
+                    "scalar": 1,
+                    "empty": {},
+                    "nested": [{"child": 2}],
+                }
+            ],
+            "outside": 3,
+        }
+
+        self.assertEqual(
+            pairs(discover(document)),
+            [("dataset", "/data"), ("scalar_value", "/outside")],
+        )
 
     def test_nested_objects_are_traversed(self):
         document = {"a": {"b": {"c": [{"x": 1}]}}}

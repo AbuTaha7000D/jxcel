@@ -26,6 +26,7 @@ WarningCode = Literal[
     "integer_precision_as_text",
     "float_precision_limited",
     "nested_value_as_json_text",
+    "empty_object_omitted",
     "dataset_skipped_zero_columns",
     "dataset_skipped_no_effective_columns",
 ]
@@ -213,6 +214,22 @@ def _iter_record_leaves(
                 stack.append((path + (key,), child))
         else:
             yield path, value
+
+
+def _iter_empty_object_paths(
+    record: dict[str, Any],
+) -> Iterator[tuple[str, ...]]:
+    """Yield empty-object paths omitted by flattening, outside JSON arrays."""
+    stack: list[tuple[tuple[str, ...], dict[str, Any]]] = [((), record)]
+    while stack:
+        path, value = stack.pop()
+        if not value:
+            if path:
+                yield path
+            continue
+        for key, child in reversed(list(value.items())):
+            if isinstance(child, dict):
+                stack.append((path + (key,), child))
 
 
 def _add_column(
@@ -525,6 +542,15 @@ def _validate_export_plan(
     validated_rows: list[tuple[PreparedValue, ...]] = []
 
     for record_index, record in enumerate(plan.records):
+        if plan.flatten:
+            for source_path in _iter_empty_object_paths(record):
+                _add_warning(
+                    counts,
+                    samples,
+                    "empty_object_omitted",
+                    encode_column_path(source_path),
+                    record_index,
+                )
         prepared_row: list[PreparedValue] = []
         for column in plan.effective_columns:
             value = _resolve_value(

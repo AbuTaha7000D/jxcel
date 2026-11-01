@@ -79,7 +79,7 @@ jxcel data.json --dataset /students
 jxcel data.json --dataset /students --dataset /orders
 ```
 
-Unsupported structures remain visible even when only some datasets are selected.
+Unsupported structures remain visible even when only some datasets are selected. Scalar values and empty objects outside dataset boundaries are listed with their JSON Pointers, so input content that is not exported is visible.
 
 `--column-map` and `--exclude-map` are repeatable and take a JSON array of exactly two strings: the dataset pointer and the exact planned column name. Use shell quoting appropriate to your platform.
 
@@ -104,7 +104,7 @@ Mappings are validated against every discovered dataset, but applied only to sel
 
 ## Nested values and flattening
 
-Nested objects flatten by default. For example, `user.name` becomes a column named `user.name`. Use `--no-flatten` for one column per top-level property:
+Nested objects flatten by default. For example, `user.name` becomes a column named `user.name`. An empty nested object contributes no column in this mode and produces an `empty_object_omitted` warning with its path and record index. Use `--no-flatten` for one column per top-level property:
 
 ```bash
 jxcel data.json --no-flatten
@@ -116,6 +116,7 @@ With `--no-flatten`, nested objects and arrays are written as compact JSON text.
 
 - `stdout`: listings, previews, dry-run plans, warnings, unsupported findings, and the successful conversion summary.
 - `stderr`: errors and argument-parser diagnostics.
+- If the console cannot encode a character, jxcel escapes it; a closed output pipe exits with status 1 without a traceback.
 - Exit `0`: successful help, version, listing, preview, dry-run, or conversion.
 - Exit `1`: input, JSON, planning, mapping, destination, workbook, or publication failure.
 - Exit `2`: command-line argument or usage error.

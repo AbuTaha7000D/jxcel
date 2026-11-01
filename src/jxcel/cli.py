@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -200,10 +201,46 @@ def _validate_arguments(
 def _emit(text: str) -> None:
     if text:
         print(text)
+        sys.stdout.flush()
 
 
 def _fail(message: str) -> None:
-    print(f"jxcel: error: {message}", file=sys.stderr)
+    try:
+        print(f"jxcel: error: {message}", file=sys.stderr)
+        sys.stderr.flush()
+    except BrokenPipeError:
+        _redirect_console_after_broken_pipe()
+
+
+def _configure_console_encoding() -> None:
+    """Escape characters the active console encoding cannot represent."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (OSError, ValueError):
+            # Some wrapped or already-closed streams cannot be reconfigured.
+            # Their normal write errors are handled at the CLI boundary.
+            continue
+
+
+def _redirect_console_after_broken_pipe() -> None:
+    """Prevent buffered console streams from raising again during shutdown."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            descriptor = stream.fileno()
+        except (AttributeError, OSError, ValueError):
+            continue
+        try:
+            null_descriptor = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(null_descriptor, descriptor)
+            finally:
+                os.close(null_descriptor)
+        except OSError:
+            continue
 
 
 def _exportable_plans(
@@ -228,9 +265,14 @@ def _preview_rows_by_pointer(
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the jxcel command and return its exit status."""
+    _configure_console_encoding()
     parser = _build_parser()
-    args = parser.parse_args(argv)
-    _validate_arguments(parser, args)
+    try:
+        args = parser.parse_args(argv)
+        _validate_arguments(parser, args)
+    except BrokenPipeError:
+        _redirect_console_after_broken_pipe()
+        return 1
 
     input_path = Path(
         args.input if args.input is not None else args.input_option
@@ -368,6 +410,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     except (JsonLoadError, PlanningError, WorkbookError) as exc:
         _fail(str(exc))
+        return 1
+    except BrokenPipeError:
+        _redirect_console_after_broken_pipe()
         return 1
 
 

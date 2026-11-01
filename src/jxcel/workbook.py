@@ -324,15 +324,26 @@ def _create_temp_file(output_path: Path) -> Path:
             ) from exc
         try:
             os.close(descriptor)
-        except OSError as exc:
+        except BaseException as exc:
+            # An interrupt can arrive after os.open() succeeds but before
+            # this helper returns the path to export_workbook(). Retry the
+            # close best-effort, then remove the path here because the
+            # caller has not yet received it and cannot clean it up.
+            try:
+                os.close(descriptor)
+            except BaseException:
+                pass
             try:
                 os.unlink(candidate)
-            except OSError:
+            except BaseException:
                 pass
-            raise WorkbookError(
-                f"Could not close the temporary workbook in {parent}: {exc}",
-                output_path=output_path,
-            ) from exc
+            if isinstance(exc, OSError):
+                raise WorkbookError(
+                    f"Could not close the temporary workbook in {parent}: "
+                    f"{exc}",
+                    output_path=output_path,
+                ) from exc
+            raise
         return candidate
     raise WorkbookError(
         f"Could not create a unique temporary workbook in {parent}",
