@@ -4,15 +4,15 @@
 
 ## Development status
 
-The converter is functional. JSON loading and validation, dataset discovery, schema planning and value preparation, workbook generation with validated publication, and command-line integration are implemented in `src/jxcel/`. The package has not been published, and Windows and macOS behavior has not been verified.
+The converter is functional. JSON loading and validation, dataset discovery, schema planning and value preparation, workbook generation with validated publication, and command-line integration are implemented in `src/jxcel/`. The package has not been published.
 
-Development checks have run on Linux with Python 3.14.8. See [ROADMAP.md](ROADMAP.md) for the specification, phase status, and known limitations.
+Phase 8 cross-platform validation is **partial**. Linux installation and command behavior passed the exercised checks with Python 3.14.8. Windows and macOS were **not tested** because no real environments were available; their behavior, path handling, shell quoting, and publication semantics remain unverified. See [ROADMAP.md](ROADMAP.md#phase-8--cross-platform-validation) for the evidence and remaining platform work.
 
 ## Requirements
 
-- Python 3.11 or newer.
+- Python 3.11 or newer. Only Python 3.14.8 has been exercised so far.
 - Runtime dependencies: the Python standard library and `openpyxl`.
-- Linux, Windows, and macOS are intended targets; only Linux has been exercised so far.
+- Linux, Windows, and macOS are intended targets. Linux has been exercised; Windows and macOS have not been verified.
 
 ## Installation
 
@@ -22,13 +22,15 @@ A package distribution is not published yet. From a local checkout:
 python -m pip install .
 ```
 
-An isolated installation from the checkout also works with `pipx`:
+This command was verified on Linux in an isolated virtual environment. The build uses isolation, so it needs access to a package index or a populated build-dependency cache; an offline install fails if the required `setuptools` build dependency is unavailable.
+
+An isolated installation from the checkout was also verified on Linux with `pipx` 1.18.11:
 
 ```bash
 pipx install .
 ```
 
-Both commands install a `jxcel` command that points at `jxcel.cli:main`.
+Both commands install a `jxcel` command that points at `jxcel.cli:main`. PATH availability was verified for the isolated virtual environment on Linux; `pipx` was exercised only on Linux, and pipx PATH setup was not separately validated.
 
 ## Usage
 
@@ -50,6 +52,8 @@ jxcel data.json --overwrite
 ```
 
 Without `--overwrite`, an existing destination is an error. With it, jxcel builds and validates a temporary workbook first, then replaces the destination through the approved publication path. jxcel does not claim crash durability or stronger atomicity than the operating system and filesystem provide.
+
+No-overwrite publication creates the destination with a same-directory hard link, so the temporary and destination files stay on one filesystem. Some filesystems do not support hard links, including FAT32/exFAT and some network or container mounts. On such filesystems, no-overwrite publication fails with exit status 1 and an explicit error. jxcel does not fall back to rename or replace, because that fallback could destroy a destination created concurrently. Overwrite publication uses the operating system's replace operation and depends on that filesystem's support. Hard-link behavior was exercised on Linux `tmpfs`; Windows, macOS, and other filesystem types were not tested.
 
 ## Inspection modes
 
@@ -92,7 +96,7 @@ jxcel data.json \
   --exclude-map '["/orders","internal=status"]'
 ```
 
-PowerShell:
+PowerShell (syntax example; not yet verified on Windows):
 
 ```powershell
 jxcel data.json `
@@ -136,12 +140,40 @@ With `--no-flatten`, nested objects and arrays are written as compact JSON text.
 
 Warnings are aggregated by code, dataset, and effective column, with an occurrence count and at most five sample record indexes.
 
+## Platform validation
+
+Phase 8 validated Linux only. The validation matrix and results are recorded in [ROADMAP.md](ROADMAP.md#phase-8--cross-platform-validation).
+
+| Platform | Status | Evidence |
+|---|---|---|
+| Linux (Fedora 44, kernel `7.2.13-200.fc44.x86_64`, Python 3.14.8, pip 26.0.1) | **Tested; exercised checks passed** | Isolated `python -m pip install .` and isolated `pipx 1.18.11 install .`; `jxcel` available on PATH; execution outside the checkout; `--version`/`--help`; relative, absolute, and Unicode paths; default and explicit output paths; existing-output and `--overwrite` behavior; missing/invalid output parents; input/output collision; repeated `--dataset`; `--column-map`/`--exclude-map`; preview, dry-run, and preview+dry-run; exit statuses 0, 1, and 2; no-write inspection modes; publication-failure cleanup. |
+| Windows | **NOT TESTED** | No Windows host, WSL, Wine, PowerShell, Windows container, or Windows image was available. Compatibility was inspected read-only only. |
+| macOS | **NOT TESTED** | No macOS host, virtual machine, container, remote target, or CI runner was available. Compatibility was inspected read-only only. |
+
+Reproducible Linux install and smoke commands, with temporary directories:
+
+```bash
+python -m venv /tmp/jxcel-venv
+/tmp/jxcel-venv/bin/python -m pip install .
+cd /tmp
+/tmp/jxcel-venv/bin/jxcel --version
+/tmp/jxcel-venv/bin/jxcel --help
+```
+
+The full test suite is run with the standard library:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest discover -s tests
+```
+
 ## Limitations
 
 - The complete JSON document and the export snapshot are held in memory; jxcel is not a streaming converter.
 - Concurrent mutation of source records while a plan is being built is unsupported. Constructing or forging internal plan objects directly can bypass validation and is outside the supported contract.
-- Windows and macOS command behavior, path handling, and publication behavior have not been verified.
-- See [ROADMAP.md](ROADMAP.md) for deferred features and remaining hardening work.
+- Windows and macOS command behavior, path handling, shell quoting, console behavior, and publication behavior have not been verified.
+- Hard-link publication depends on filesystem support and was exercised only on Linux `tmpfs`; see the publication note above.
+- Only Python 3.14.8 has been exercised. Python 3.11–3.13 are declared as supported by package metadata but were not tested.
+- See [ROADMAP.md](ROADMAP.md) for deferred features and remaining platform-validation and release work.
 
 ## Project guidance
 

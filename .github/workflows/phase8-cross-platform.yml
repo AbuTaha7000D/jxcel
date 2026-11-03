@@ -1,0 +1,1107 @@
+name: Phase 8 Cross-Platform Validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  phase8:
+    name: Phase 8 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-2025
+          - macos-15
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Record environment
+        env:
+          EVIDENCE: ${{ runner.temp }}/jxcel-phase8-evidence
+          VENV: ${{ runner.temp }}/jxcel-phase8-venv
+        run: |
+          set -euo pipefail
+          {
+            echo "EVIDENCE=$EVIDENCE"
+            echo "VENV=$VENV"
+          } >> "$GITHUB_ENV"
+          python - <<'PY'
+          import json
+          import os
+          import platform
+          import shutil
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          evidence = Path(os.environ["EVIDENCE"])
+          evidence.mkdir(parents=True, exist_ok=True)
+          disk = shutil.disk_usage(tempfile.gettempdir())
+          info = {
+              "runner_os": os.environ.get("RUNNER_OS"),
+              "runner_arch": os.environ.get("RUNNER_ARCH"),
+              "platform": platform.platform(),
+              "system": platform.system(),
+              "release": platform.release(),
+              "version": platform.version(),
+              "machine": platform.machine(),
+              "python": sys.version,
+              "python_executable": sys.executable,
+              "pip": subprocess.run(
+                  [sys.executable, "-m", "pip", "--version"],
+                  text=True,
+                  capture_output=True,
+              ).stdout.strip(),
+              "tempdir": tempfile.gettempdir(),
+              "disk_total": disk.total,
+              "disk_used": disk.used,
+              "disk_free": disk.free,
+          }
+          if sys.platform == "darwin":
+              info["sw_vers"] = subprocess.run(
+                  ["sw_vers"], text=True, capture_output=True
+              ).stdout.strip()
+          elif sys.platform == "win32":
+              info["cmd_ver"] = subprocess.run(
+                  ["cmd", "/c", "ver"], text=True, capture_output=True
+              ).stdout.strip()
+          text = json.dumps(info, indent=2, ensure_ascii=False) + "\n"
+          (evidence / "environment.json").write_text(text, encoding="utf-8")
+          (evidence / "environment.txt").write_text(text, encoding="utf-8")
+          print(text)
+          PY
+
+      - name: Create isolated virtual environment and install project
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            EVIDENCE_BASH="$(cygpath -u "$EVIDENCE")"
+            VENV_BASH="$(cygpath -u "$VENV")"
+          else
+            EVIDENCE_BASH="$EVIDENCE"
+            VENV_BASH="$VENV"
+          fi
+          python -m venv "$VENV_BASH"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            VENV_BIN="$(cygpath -w "$VENV_BASH/Scripts")"
+            VENV_PY="$(cygpath -w "$VENV_BASH/Scripts/python.exe")"
+            VENV_BIN_BASH="$VENV_BASH/Scripts"
+            VENV_PY_BASH="$VENV_BIN_BASH/python.exe"
+          else
+            VENV_BIN="$VENV/bin"
+            VENV_PY="$VENV_BIN/python"
+            VENV_BIN_BASH="$VENV_BIN"
+            VENV_PY_BASH="$VENV_PY"
+          fi
+          "$VENV_PY_BASH" -m pip install --upgrade pip 2>&1 | tee "$EVIDENCE_BASH/pip-upgrade.log"
+          "$VENV_PY_BASH" -m pip install . 2>&1 | tee "$EVIDENCE_BASH/install.log"
+          "$VENV_PY_BASH" -m pip check 2>&1 | tee "$EVIDENCE_BASH/pip-check.log"
+          {
+            echo "EVIDENCE_BASH=$EVIDENCE_BASH"
+            echo "VENV_BIN=$VENV_BIN"
+            echo "VENV_PY=$VENV_PY"
+            echo "VENV_BIN_BASH=$VENV_BIN_BASH"
+            echo "VENV_PY_BASH=$VENV_PY_BASH"
+          } >> "$GITHUB_ENV"
+
+      - name: Verify installed command, PATH, version, and help
+        run: |
+          set -euo pipefail
+          export PATH="$VENV_BIN_BASH:$PATH"
+          command -v jxcel | tee "$EVIDENCE_BASH/command-path.txt"
+          jxcel --version | tee "$EVIDENCE_BASH/version.txt"
+          jxcel --help | tee "$EVIDENCE_BASH/help.txt"
+
+      - name: Verify isolated pipx installation
+        id: pipx
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            EVIDENCE_BASH="$(cygpath -u "$EVIDENCE")"
+            PIPX_ROOT="$(cygpath -u "$RUNNER_TEMP")/jxcel-pipx"
+            PIPX_HOME="$(cygpath -w "$PIPX_ROOT/home")"
+            PIPX_BIN_DIR="$(cygpath -w "$PIPX_ROOT/bin")"
+            PIPX_MAN_DIR="$(cygpath -w "$PIPX_ROOT/man")"
+            PIPX_COMPLETION_DIR="$(cygpath -w "$PIPX_ROOT/completions")"
+            PIPX_VENV_BASH="$PIPX_ROOT/venv"
+            PIPX_PY_BASH="$PIPX_VENV_BASH/Scripts/python.exe"
+            PIPX_BIN_BASH="$PIPX_ROOT/bin"
+            JXCEL_BIN="$PIPX_BIN_BASH/jxcel.exe"
+          else
+            EVIDENCE_BASH="$EVIDENCE"
+            PIPX_ROOT="$RUNNER_TEMP/jxcel-pipx"
+            PIPX_HOME="$PIPX_ROOT/home"
+            PIPX_BIN_DIR="$PIPX_ROOT/bin"
+            PIPX_MAN_DIR="$PIPX_ROOT/man"
+            PIPX_COMPLETION_DIR="$PIPX_ROOT/completions"
+            PIPX_VENV_BASH="$PIPX_ROOT/venv"
+            PIPX_PY_BASH="$PIPX_VENV_BASH/bin/python"
+            PIPX_BIN_BASH="$PIPX_ROOT/bin"
+            JXCEL_BIN="$PIPX_BIN_BASH/jxcel"
+          fi
+          PIPX_DEFAULT_BACKEND="pip"
+          export PIPX_HOME PIPX_BIN_DIR PIPX_MAN_DIR PIPX_COMPLETION_DIR PIPX_DEFAULT_BACKEND
+          mkdir -p "$PIPX_ROOT" "$PIPX_ROOT/man" "$PIPX_ROOT/completions" "$EVIDENCE_BASH"
+          python -m venv "$PIPX_VENV_BASH"
+          "$PIPX_PY_BASH" -m pip install --upgrade pip 2>&1 | tee "$EVIDENCE_BASH/pipx-pip-upgrade.log"
+          "$PIPX_PY_BASH" -m pip install pipx 2>&1 | tee "$EVIDENCE_BASH/pipx-tool-install.log"
+          "$PIPX_PY_BASH" -m pipx --version | tee "$EVIDENCE_BASH/pipx-version.txt"
+          "$PIPX_PY_BASH" -m pipx environment | tee "$EVIDENCE_BASH/pipx-environment.txt"
+          "$PIPX_PY_BASH" -m pipx install . 2>&1 | tee "$EVIDENCE_BASH/pipx-install.log"
+          "$PIPX_PY_BASH" -m pipx list | tee "$EVIDENCE_BASH/pipx-list.txt"
+          "$PIPX_PY_BASH" -m pipx runpip jxcel check 2>&1 | tee "$EVIDENCE_BASH/pipx-runpip-check.txt"
+          test -f "$JXCEL_BIN"
+          "$JXCEL_BIN" --version | tee "$EVIDENCE_BASH/pipx-jxcel-version.txt"
+          "$JXCEL_BIN" --help | tee "$EVIDENCE_BASH/pipx-jxcel-help.txt"
+          OUTSIDE="$RUNNER_TEMP/jxcel-pipx-outside"
+          rm -rf "$OUTSIDE"
+          mkdir -p "$OUTSIDE"
+          printf '%s\n' '{"data": [{"id": 1, "name": "pipx"}]}' > "$OUTSIDE/data.json"
+          (
+            cd "$OUTSIDE"
+            env -u PYTHONPATH -u PYTHONHOME "$JXCEL_BIN" data.json 2>&1 | tee "$EVIDENCE_BASH/pipx-outside-checkout.log"
+          )
+          test -f "$OUTSIDE/data.xlsx"
+          PATH="$PIPX_BIN_BASH:$PATH" command -v jxcel | tee "$EVIDENCE_BASH/pipx-command-path.txt"
+          grep -q "jxcel" "$EVIDENCE_BASH/pipx-command-path.txt"
+
+      - name: Run complete unittest suite
+        id: unittest
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src "$VENV_PY_BASH" -m unittest discover -s tests -v 2>&1 | tee "$EVIDENCE_BASH/unittest.log"
+
+      - name: Run Phase 8 CLI acceptance checks
+        id: acceptance
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          "$VENV_PY_BASH" - <<'PY' 2>&1 | tee "$EVIDENCE_BASH/acceptance.log"
+          #!/usr/bin/env python3
+          """Phase 8 CLI acceptance harness used by the manual GitHub Actions workflow."""
+
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          import shlex
+          import stat
+          import subprocess
+          import sys
+          import threading
+          import time
+          import traceback
+          from importlib.metadata import version as distribution_version
+          from pathlib import Path
+
+          EVIDENCE = Path(os.environ["EVIDENCE"]).resolve()
+          TEMP_ROOT = EVIDENCE / "work"
+          CLI = Path(sys.executable).parent / (
+              "jxcel.exe" if os.name == "nt" else "jxcel"
+          )
+          EXPECTED_VERSION = distribution_version("jxcel")
+          CLI_ENV = os.environ.copy()
+          CLI_ENV.pop("PYTHONPATH", None)
+          CLI_ENV.pop("PYTHONHOME", None)
+          LOG = EVIDENCE / "acceptance-checks.log"
+          SUMMARY = EVIDENCE / "summary.json"
+          DEFAULT_OUTPUT = None
+          MAIN = None
+          UNICODE_FILE = None
+          UNICODE_DIR = None
+          INVALID = None
+          NO_DATASET = None
+          QUOTING_DATA = None
+          STUDENTS_KEY = 'weird,name=with"quote\'and,comma'
+          NAIVE_KEY = "naïve=ü"
+          ORDER_KEY = "order,id"
+          INTERNAL_KEY = "internal=status"
+
+          results: list[dict[str, str]] = []
+          failures: list[str] = []
+          limitations: list[str] = []
+          hardlink_ok: bool | None = None
+
+
+          def log(message: str) -> None:
+              print(message, flush=True)
+              with LOG.open("a", encoding="utf-8") as handle:
+                  handle.write(message + "\n")
+
+
+          def record(name: str, status: str, detail: str) -> None:
+              results.append({"name": name, "status": status, "detail": detail})
+              log(f"[{status}] {name}: {detail}")
+
+
+          def check(name: str, function) -> None:
+              try:
+                  result = function()
+                  if (
+                      isinstance(result, tuple)
+                      and len(result) == 2
+                      and result[0] in {"PASS", "LIMITATION"}
+                  ):
+                      status, detail = result
+                  else:
+                      status, detail = "PASS", str(result or "")
+                  record(name, status, detail)
+                  if status == "LIMITATION":
+                      limitations.append(f"{name}: {detail}")
+              except Exception as exc:
+                  detail = f"{type(exc).__name__}: {exc}"
+                  record(name, "FAIL", detail)
+                  failures.append(name)
+                  log(traceback.format_exc())
+
+
+          def run(args, cwd=None, expect=0):
+              command = [str(CLI), *[str(arg) for arg in args]]
+              log("$ " + shlex.join(command))
+              completed = subprocess.run(
+                  command,
+                  cwd=str(cwd or TEMP_ROOT),
+                  env=CLI_ENV,
+                  text=True,
+                  encoding="utf-8",
+                  errors="replace",
+                  capture_output=True,
+              )
+              if completed.stdout.strip():
+                  log("stdout:\n" + completed.stdout.rstrip())
+              if completed.stderr.strip():
+                  log("stderr:\n" + completed.stderr.rstrip())
+              if expect is not None and completed.returncode != expect:
+                  raise AssertionError(
+                      f"expected exit {expect}, got {completed.returncode}: "
+                      f"{completed.stderr.strip() or completed.stdout.strip()}"
+                  )
+              return completed
+
+
+          def sha256(path: Path) -> str:
+              digest = hashlib.sha256()
+              digest.update(path.read_bytes())
+              return digest.hexdigest()
+
+
+          def snapshot(root: Path) -> dict[str, tuple[str, int | None, str | None, int]]:
+              items = {}
+              for path in sorted(root.rglob("*")):
+                  relative = str(path.relative_to(root))
+                  status = path.stat()
+                  if path.is_dir():
+                      items[relative] = ("dir", None, None, status.st_mtime_ns)
+                  else:
+                      items[relative] = (
+                          "file",
+                          status.st_size,
+                          sha256(path),
+                          status.st_mtime_ns,
+                      )
+              return items
+
+
+          def inspect_workbook(path: Path) -> dict[str, object]:
+              from openpyxl import load_workbook
+
+              workbook = load_workbook(path, read_only=True, data_only=True)
+              try:
+                  headers = {}
+                  for worksheet in workbook.worksheets:
+                      row = next(worksheet.iter_rows(min_row=1, max_row=1), ())
+                      headers[worksheet.title] = [cell.value for cell in row]
+                  return {"sheets": list(workbook.sheetnames), "headers": headers}
+              finally:
+                  workbook.close()
+
+
+          def write_json(path: Path, data) -> None:
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(
+                  json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                  encoding="utf-8",
+              )
+
+
+          def pair(*parts: str) -> str:
+              return json.dumps(list(parts), ensure_ascii=False, separators=(",", ":"))
+
+
+          def prepare() -> None:
+              global DEFAULT_OUTPUT, MAIN, UNICODE_FILE, UNICODE_DIR
+              global INVALID, NO_DATASET, QUOTING_DATA
+
+              TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+              data = {
+                  "students": [
+                      {
+                          "id": 1,
+                          "user": {"name": "Ada"},
+                          "note": "naïve,=ok",
+                          STUDENTS_KEY: "q",
+                          NAIVE_KEY: "u",
+                      },
+                      {
+                          "id": 2,
+                          "user": {"name": "Grace"},
+                          "note": "日本",
+                          STUDENTS_KEY: "z",
+                          NAIVE_KEY: "v",
+                      },
+                  ],
+                  "orders": [
+                      {ORDER_KEY: 10, INTERNAL_KEY: "new", "amount": 5.5},
+                      {ORDER_KEY: 11, INTERNAL_KEY: "done", "amount": 7.0},
+                  ],
+              }
+              MAIN = TEMP_ROOT / "data" / "main.json"
+              DEFAULT_OUTPUT = MAIN.with_suffix(".xlsx")
+              write_json(MAIN, data)
+
+              UNICODE_DIR = TEMP_ROOT / "données-日本"
+              UNICODE_DIR.mkdir(parents=True, exist_ok=True)
+              UNICODE_FILE = UNICODE_DIR / "étudiants_日本.json"
+              write_json(UNICODE_FILE, data)
+
+              INVALID = TEMP_ROOT / "invalid.json"
+              INVALID.write_text('{"bad": }\n', encoding="utf-8")
+
+              NO_DATASET = TEMP_ROOT / "no-dataset.json"
+              write_json(NO_DATASET, {"value": 1})
+
+              QUOTING_DATA = EVIDENCE / "quoting" / "data.json"
+              write_json(QUOTING_DATA, data)
+
+
+          def check_version_help() -> str:
+              version = run(["--version"], TEMP_ROOT, 0)
+              assert f"jxcel {EXPECTED_VERSION}" in version.stdout, version.stdout
+              help_result = run(["--help"], TEMP_ROOT, 0)
+              assert "usage:" in help_result.stdout.lower(), help_result.stdout
+              return "version and help exited 0"
+
+
+          def check_outside_checkout() -> str:
+              run(["--version"], TEMP_ROOT, 0)
+              code = (
+                  "import jxcel, pathlib; "
+                  "p = pathlib.Path(jxcel.__file__).resolve(); "
+                  "print(p); "
+                  "assert 'site-packages' in str(p).lower() or "
+                  "'dist-packages' in str(p).lower()"
+              )
+              log("$ " + shlex.join([sys.executable, "-c", code]))
+              completed = subprocess.run(
+                  [sys.executable, "-c", code],
+                  cwd=str(TEMP_ROOT),
+                  env=CLI_ENV,
+                  text=True,
+                  encoding="utf-8",
+                  errors="replace",
+                  capture_output=True,
+              )
+              if completed.stdout.strip():
+                  log(completed.stdout.rstrip())
+              if completed.stderr.strip():
+                  log(completed.stderr.rstrip())
+              assert completed.returncode == 0, completed.stderr
+              return f"imported {completed.stdout.strip()}"
+
+
+          def check_default_output() -> str:
+              case = TEMP_ROOT / "default-output"
+              case.mkdir(parents=True, exist_ok=True)
+              write_json(case / "data.json", json.loads(MAIN.read_text(encoding="utf-8")))
+              run(["data.json"], case, 0)
+              output = case / "data.xlsx"
+              assert output.exists(), output
+              info = inspect_workbook(output)
+              assert info["sheets"] == ["students", "orders"], info
+              return "default output written beside input"
+
+
+          def check_relative_input() -> str:
+              case = TEMP_ROOT / "relative"
+              sub = case / "nested"
+              sub.mkdir(parents=True, exist_ok=True)
+              write_json(sub / "rel.json", json.loads(MAIN.read_text(encoding="utf-8")))
+              run(["rel.json"], sub, 0)
+              assert (sub / "rel.xlsx").exists()
+              return "relative input path worked"
+
+
+          def check_absolute_paths() -> str:
+              case = TEMP_ROOT / "absolute"
+              case.mkdir(parents=True, exist_ok=True)
+              source = case / "absolute.json"
+              output = case / "absolute.xlsx"
+              write_json(source, json.loads(MAIN.read_text(encoding="utf-8")))
+              run([source, "-o", output], TEMP_ROOT, 0)
+              assert output.exists()
+              return "absolute input and output paths worked"
+
+
+          def check_input_option() -> str:
+              case = TEMP_ROOT / "input-option"
+              case.mkdir(parents=True, exist_ok=True)
+              output = case / "via-i.xlsx"
+              run(["-i", MAIN, "-o", output], TEMP_ROOT, 0)
+              assert output.exists()
+              return "-i/--input worked"
+
+
+          def check_unicode_paths() -> str:
+              output = UNICODE_DIR / "résultat_日本語.xlsx"
+              run([UNICODE_FILE, "-o", output], TEMP_ROOT, 0)
+              assert output.exists(), output
+              inspect_workbook(output)
+              return f"Unicode input/output worked: {output.name}"
+
+
+          def check_existing_and_overwrite() -> str:
+              case = TEMP_ROOT / "overwrite"
+              case.mkdir(parents=True, exist_ok=True)
+              output = case / "existing.xlsx"
+              output.write_bytes(b"sentinel")
+              before = sha256(output)
+              mode_before = stat.S_IMODE(output.stat().st_mode)
+              if os.name != "nt":
+                  os.chmod(output, 0o640)
+                  mode_before = 0o640
+              run([MAIN, "-o", output], TEMP_ROOT, 1)
+              assert sha256(output) == before, "existing output changed without --overwrite"
+              if os.name != "nt":
+                  assert stat.S_IMODE(output.stat().st_mode) == mode_before
+              run([MAIN, "-o", output, "--overwrite"], TEMP_ROOT, 0)
+              assert sha256(output) != before, "overwrite did not replace output"
+              inspect_workbook(output)
+              detail = "existing output preserved without --overwrite; replaced and validated with --overwrite"
+              if os.name != "nt":
+                  assert stat.S_IMODE(output.stat().st_mode) == mode_before
+                  detail += f"; mode {oct(mode_before)} preserved"
+              return detail
+
+
+          def check_missing_parent() -> str:
+              case = TEMP_ROOT / "missing-parent"
+              case.mkdir(parents=True, exist_ok=True)
+              output = case / "missing" / "out.xlsx"
+              run([MAIN, "-o", output], TEMP_ROOT, 1)
+              assert not output.parent.exists(), "missing parent directory was created"
+              return "missing output parent failed without creating directories"
+
+
+          def check_parent_is_file() -> str:
+              case = TEMP_ROOT / "parent-file"
+              case.mkdir(parents=True, exist_ok=True)
+              parent = case / "parent"
+              parent.write_bytes(b"x")
+              run([MAIN, "-o", parent / "out.xlsx"], TEMP_ROOT, 1)
+              return "output parent that is a file failed"
+
+
+          def check_collision() -> str:
+              case = TEMP_ROOT / "collision"
+              case.mkdir(parents=True, exist_ok=True)
+              source = case / "collide.json"
+              write_json(source, json.loads(MAIN.read_text(encoding="utf-8")))
+              before = sha256(source)
+              run([source, "-o", source, "--overwrite"], TEMP_ROOT, 1)
+              assert sha256(source) == before, "input changed on collision failure"
+              return "input/output collision failed without changing input"
+
+
+          def check_symlink_collision():
+              case = TEMP_ROOT / "collision-symlink"
+              case.mkdir(parents=True, exist_ok=True)
+              source = case / "source.json"
+              write_json(source, json.loads(MAIN.read_text(encoding="utf-8")))
+              alias = case / "alias.json"
+              try:
+                  alias.symlink_to(source)
+              except (OSError, NotImplementedError) as exc:
+                  return (
+                      "LIMITATION",
+                      f"symbolic links unavailable: {exc}",
+                  )
+              before = sha256(source)
+              run([alias, "-o", source, "--overwrite"], TEMP_ROOT, 1)
+              assert sha256(source) == before, (
+                  "input changed on symlink collision failure"
+              )
+              assert alias.is_symlink(), alias
+              return "symlink-alias collision failed without changing input"
+
+
+          def check_repeated_datasets() -> str:
+              case = TEMP_ROOT / "repeated-datasets"
+              case.mkdir(parents=True, exist_ok=True)
+              output = case / "selected.xlsx"
+              run(
+                  [
+                      MAIN,
+                      "--dataset",
+                      "/students",
+                      "-d",
+                      "/orders",
+                      "-o",
+                      output,
+                  ],
+                  TEMP_ROOT,
+                  0,
+              )
+              info = inspect_workbook(output)
+              assert info["sheets"] == ["students", "orders"], info
+              return "repeated --dataset/-d selection produced both sheets"
+
+
+          def check_mappings() -> str:
+              case = TEMP_ROOT / "mappings"
+              case.mkdir(parents=True, exist_ok=True)
+              output = case / "mapped.xlsx"
+              run(
+                  [
+                      MAIN,
+                      "--dataset",
+                      "/students",
+                      "--dataset",
+                      "/orders",
+                      "--column-map",
+                      pair("/students", "id"),
+                      "--column-map",
+                      pair("/students", STUDENTS_KEY),
+                      "--column-map",
+                      pair("/students", NAIVE_KEY),
+                      "--exclude-map",
+                      pair("/orders", INTERNAL_KEY),
+                      "-o",
+                      output,
+                  ],
+                  TEMP_ROOT,
+                  0,
+              )
+              info = inspect_workbook(output)
+              assert info["headers"]["students"] == ["id", STUDENTS_KEY, NAIVE_KEY], info
+              assert info["headers"]["orders"] == [ORDER_KEY, "amount"], info
+              return "include and exclude mappings produced expected columns"
+
+
+          def check_preview() -> str:
+              completed = run([MAIN, "--preview"], TEMP_ROOT, 0)
+              assert "Preview '/students'" in completed.stdout, completed.stdout
+              assert "Grace" in completed.stdout, completed.stdout
+              assert not DEFAULT_OUTPUT.exists(), "preview created default output"
+              limited = run(
+                  [MAIN, "--preview", "--preview-rows", "1"],
+                  TEMP_ROOT,
+                  0,
+              )
+              assert "Preview '/students' (1 of 2 rows):" in limited.stdout, (
+                  limited.stdout
+              )
+              assert not DEFAULT_OUTPUT.exists(), "preview created default output"
+              return "preview rendered rows and --preview-rows limited output"
+
+
+          def check_dry_run() -> str:
+              case = TEMP_ROOT / "dry-run"
+              case.mkdir(parents=True, exist_ok=True)
+              existing = case / "existing.xlsx"
+              existing.write_bytes(b"sentinel")
+              before = sha256(existing)
+              plan = run([MAIN, "--dry-run"], TEMP_ROOT, 0)
+              assert "Dry run: no workbook will be written." in plan.stdout, (
+                  plan.stdout
+              )
+              assert "Overwrite: no" in plan.stdout, plan.stdout
+              assert "Datasets: 2" in plan.stdout, plan.stdout
+              assert "columns: id" in plan.stdout, plan.stdout
+              assert not DEFAULT_OUTPUT.exists(), "dry-run created default output"
+              run([MAIN, "--dry-run", "-o", existing], TEMP_ROOT, 1)
+              assert sha256(existing) == before
+              run([MAIN, "--dry-run", "-o", existing, "--overwrite"], TEMP_ROOT, 0)
+              assert sha256(existing) == before
+              combined = run(
+                  [MAIN, "--preview", "--dry-run", "--preview-rows", "1"],
+                  TEMP_ROOT,
+                  0,
+              )
+              assert "Dry run: no workbook will be written." in combined.stdout, (
+                  combined.stdout
+              )
+              assert "Preview '/students'" in combined.stdout, combined.stdout
+              assert not DEFAULT_OUTPUT.exists(), "preview+dry-run created default output"
+              return "dry-run rendered the plan; existing output untouched"
+
+
+          def check_list() -> str:
+              completed = run([MAIN, "--list"], TEMP_ROOT, 0)
+              assert "Datasets: 2" in completed.stdout, completed.stdout
+              assert "available:" in completed.stdout, completed.stdout
+              assert "'/students'" in completed.stdout, completed.stdout
+              assert not DEFAULT_OUTPUT.exists(), "list created default output"
+              return "list rendered datasets and columns without output"
+
+
+          def check_no_write() -> str:
+              case = TEMP_ROOT / "no-write"
+              case.mkdir(parents=True, exist_ok=True)
+              write_json(case / "data.json", json.loads(MAIN.read_text(encoding="utf-8")))
+              before = snapshot(case)
+              modes = [
+                  ["--list"],
+                  ["--preview"],
+                  ["--preview", "--preview-rows", "1"],
+                  ["--dry-run"],
+                  ["--preview", "--dry-run"],
+              ]
+              for mode in modes:
+                  run([MAIN, *mode], case, 0)
+                  after = snapshot(case)
+                  assert after == before, f"inspection mode changed files: {mode}"
+                  assert not DEFAULT_OUTPUT.exists(), f"inspection mode created default output: {mode}"
+              return "inspection modes made no filesystem changes"
+
+
+          def check_exit_1() -> str:
+              output = TEMP_ROOT / "exit-1.xlsx"
+              cases = [
+                  ("missing input", [TEMP_ROOT / "missing.json"]),
+                  ("invalid JSON", [INVALID]),
+                  ("unknown dataset", [MAIN, "--dataset", "/missing", "-o", output]),
+                  (
+                      "unknown column",
+                      [MAIN, "--column-map", pair("/students", "missing"), "-o", output],
+                  ),
+                  ("malformed map", [MAIN, "--column-map", "not-json", "-o", output]),
+                  (
+                      "three-element map",
+                      [
+                          MAIN,
+                          "--column-map",
+                          json.dumps(["/students", "id", "extra"]),
+                          "-o",
+                          output,
+                      ],
+                  ),
+                  ("no exportable dataset", [NO_DATASET, "-o", output]),
+              ]
+              for label, args in cases:
+                  run(args, TEMP_ROOT, 1)
+                  log(f"exit-1 case passed: {label}")
+              return "all expected exit-1 cases returned 1"
+
+
+          def check_exit_2() -> str:
+              output = TEMP_ROOT / "exit-2.xlsx"
+              cases = [
+                  ("no arguments", []),
+                  ("both input forms", [MAIN, "-i", MAIN]),
+                  ("list with preview", [MAIN, "--list", "--preview"]),
+                  ("list with dry-run", [MAIN, "--list", "--dry-run"]),
+                  ("preview with output", [MAIN, "--preview", "-o", output]),
+                  ("preview with overwrite", [MAIN, "--preview", "--overwrite"]),
+                  ("zero preview rows", [MAIN, "--preview", "--preview-rows", "0"]),
+                  ("unknown option", [MAIN, "--unknown"]),
+                  ("quiet and verbose", [MAIN, "-q", "-v"]),
+              ]
+              for label, args in cases:
+                  run(args, TEMP_ROOT, 2)
+                  log(f"exit-2 case passed: {label}")
+              return "all expected exit-2 cases returned 2"
+
+
+          def check_hardlink_probe():
+              global hardlink_ok
+              case = TEMP_ROOT / "hardlink-probe"
+              case.mkdir(parents=True, exist_ok=True)
+              source = case / "source.bin"
+              destination = case / "destination.bin"
+              source.write_bytes(b"hardlink probe")
+              try:
+                  os.link(source, destination)
+              except OSError as exc:
+                  hardlink_ok = False
+                  return (
+                      "LIMITATION",
+                      f"os.link is unavailable in the runner temp filesystem: {exc}",
+                  )
+              else:
+                  hardlink_ok = True
+                  destination.unlink()
+                  source.unlink()
+                  return "os.link works in the runner temp filesystem"
+
+
+          def check_no_overwrite_publication():
+              case = TEMP_ROOT / "publication-no-overwrite"
+              case.mkdir(parents=True, exist_ok=True)
+              output = case / "new.xlsx"
+              completed = run([MAIN, "-o", output], TEMP_ROOT, None)
+              if hardlink_ok is None:
+                  raise AssertionError("hard-link probe did not set a result")
+              if hardlink_ok:
+                  assert completed.returncode == 0, completed.stderr
+                  assert output.exists()
+                  inspect_workbook(output)
+                  return "no-overwrite publication created a valid workbook"
+              assert completed.returncode == 1, (
+                  "no-overwrite succeeded even though os.link is unavailable; "
+                  "unsafe fallback suspected"
+              )
+              assert "publish" in completed.stderr.lower() or "fallback" in completed.stderr.lower(), (
+                  completed.stderr
+              )
+              assert not output.exists()
+              return (
+                  "LIMITATION",
+                  "hard links unavailable; no-overwrite failed safely without creating output",
+              )
+
+
+          def check_publication_cleanup() -> str:
+              case = TEMP_ROOT / "publication-cleanup"
+              case.mkdir(parents=True, exist_ok=True)
+              existing = case / "existing.xlsx"
+              existing.write_bytes(b"sentinel")
+              run([MAIN, "-o", existing], TEMP_ROOT, 1)
+              leftovers = list(TEMP_ROOT.rglob(".jxcel-*.tmp.xlsx"))
+              assert not leftovers, leftovers
+              directory = case / "outdir"
+              directory.mkdir()
+              run([MAIN, "-o", directory, "--overwrite"], TEMP_ROOT, 1)
+              leftovers = list(TEMP_ROOT.rglob(".jxcel-*.tmp.xlsx"))
+              assert not leftovers, leftovers
+              no_overwrite_directory = case / "outdir-no-overwrite"
+              no_overwrite_directory.mkdir()
+              run([MAIN, "-o", no_overwrite_directory], TEMP_ROOT, 1)
+              leftovers = list(TEMP_ROOT.rglob(".jxcel-*.tmp.xlsx"))
+              assert not leftovers, leftovers
+              return "pre-publication destination failures left no temporary files"
+
+
+          def check_publication_race_cleanup() -> str:
+              # Create the destination only after the CLI has created its
+              # temporary workbook. The destination was already validated,
+              # so publication fails after the temporary file exists.
+              case = TEMP_ROOT / "publication-race"
+              case.mkdir(parents=True, exist_ok=True)
+              source = case / "race.json"
+              write_json(
+                  source,
+                  {
+                      "rows": [
+                          {
+                              "id": index,
+                              "name": f"row-{index}",
+                              "amount": index * 0.5,
+                          }
+                          for index in range(10000)
+                      ]
+                  },
+              )
+              output = case / "race.xlsx"
+              observed: list[Path | None] = []
+              stop = threading.Event()
+
+              def watch() -> None:
+                  deadline = time.monotonic() + 60
+                  while time.monotonic() < deadline and not stop.is_set():
+                      matches = sorted(case.glob(".jxcel-*.tmp.xlsx"))
+                      if matches:
+                          observed.append(matches[0])
+                          output.write_bytes(b"race-sentinel")
+                          return
+                      time.sleep(0.001)
+                  observed.append(None)
+
+              watcher = threading.Thread(target=watch, daemon=True)
+              watcher.start()
+              completed = run([source, "-o", output], TEMP_ROOT, None)
+              stop.set()
+              watcher.join(timeout=5)
+              assert observed and observed[0] is not None, (
+                  "race watcher did not observe a temporary workbook"
+              )
+              log(f"observed temporary workbook: {observed[0]}")
+              assert completed.returncode == 1, (
+                  f"expected publication failure, got "
+                  f"{completed.returncode}: {completed.stderr}"
+              )
+              assert output.read_bytes() == b"race-sentinel", (
+                  "destination created by the race watcher was not preserved"
+              )
+              leftovers = list(case.glob(".jxcel-*.tmp.xlsx"))
+              assert not leftovers, leftovers
+              return (
+                  "post-creation publication failure removed the temporary "
+                  "workbook and preserved the destination"
+              )
+
+
+          def check_final_temp_cleanup() -> str:
+              leftovers = list(TEMP_ROOT.rglob(".jxcel-*.tmp.xlsx"))
+              assert not leftovers, leftovers
+              return "no .jxcel-*.tmp.xlsx files remain"
+
+
+          def write_summary() -> None:
+              status = "FAIL" if failures else ("PASS_WITH_LIMITATIONS" if limitations else "PASS")
+              summary = {
+                  "status": status,
+                  "os": sys.platform,
+                  "python": sys.version,
+                  "cli": str(CLI),
+                  "evidence": str(EVIDENCE),
+                  "work": str(TEMP_ROOT),
+                  "checks": results,
+                  "failures": failures,
+                  "limitations": limitations,
+              }
+              SUMMARY.write_text(
+                  json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+                  encoding="utf-8",
+              )
+              log(
+                  f"Summary: {status}; failures={len(failures)}; "
+                  f"limitations={len(limitations)}"
+              )
+              if limitations:
+                  print("::warning title=Phase 8 limitations::" + " | ".join(limitations))
+              if failures:
+                  print(
+                      "::error title=Phase 8 failures::"
+                      + f"{len(failures)} check(s) failed; see acceptance-checks.log"
+                  )
+
+
+          def main() -> int:
+              EVIDENCE.mkdir(parents=True, exist_ok=True)
+              LOG.write_text("", encoding="utf-8")
+              log(f"CLI: {CLI}")
+              log(f"Python: {sys.version}")
+              log(f"Platform: {sys.platform}")
+              log(f"Evidence: {EVIDENCE}")
+              try:
+                  prepare()
+              except Exception:
+                  record("setup", "FAIL", traceback.format_exc())
+                  failures.append("setup")
+                  write_summary()
+                  return 1
+
+              checks = [
+                  ("version and help", check_version_help),
+                  ("outside checkout and venv import", check_outside_checkout),
+                  ("default output", check_default_output),
+                  ("relative input", check_relative_input),
+                  ("absolute paths", check_absolute_paths),
+                  ("-i/--input", check_input_option),
+                  ("Unicode paths", check_unicode_paths),
+                  ("existing output and overwrite", check_existing_and_overwrite),
+                  ("missing output parent", check_missing_parent),
+                  ("output parent is a file", check_parent_is_file),
+                  ("input/output collision", check_collision),
+                  ("symlink-alias collision", check_symlink_collision),
+                  ("repeated datasets", check_repeated_datasets),
+                  ("column and exclude mappings", check_mappings),
+                  ("preview", check_preview),
+                  ("dry-run", check_dry_run),
+                  ("list", check_list),
+                  ("inspection modes make no writes", check_no_write),
+                  ("exit status 1 cases", check_exit_1),
+                  ("exit status 2 cases", check_exit_2),
+                  ("hard-link probe", check_hardlink_probe),
+                  ("no-overwrite publication", check_no_overwrite_publication),
+                  ("pre-publication destination failures", check_publication_cleanup),
+                  ("post-creation publication cleanup", check_publication_race_cleanup),
+                  ("final temporary-file cleanup", check_final_temp_cleanup),
+              ]
+              for name, function in checks:
+                  check(name, function)
+
+              write_summary()
+              return 1 if failures else 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main())
+          PY
+
+      - name: Native Windows console encoding (Windows)
+        id: console_encoding
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          "$VENV_PY_BASH" - <<'PY' 2>&1 | tee "$EVIDENCE_BASH/console-encoding.log"
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          evidence = Path(os.environ["EVIDENCE"])
+          data = evidence / "console-encoding" / "data.json"
+          data.parent.mkdir(parents=True, exist_ok=True)
+          data.write_text(
+              json.dumps(
+                  {"data": [{"café": "été", "日本": "語", "note": "naïve"}]},
+                  ensure_ascii=False,
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+
+          environment = os.environ.copy()
+          environment.pop("PYTHONIOENCODING", None)
+          environment.pop("PYTHONPATH", None)
+          environment.pop("PYTHONHOME", None)
+          environment["PYTHONUTF8"] = "0"
+          cli = Path(sys.executable).with_name(
+              "jxcel.exe" if os.name == "nt" else "jxcel"
+          )
+          completed = subprocess.run(
+              [str(cli), str(data), "--list"],
+              capture_output=True,
+              env=environment,
+          )
+          print(f"returncode: {completed.returncode}")
+          print(f"stdout bytes: {len(completed.stdout)}")
+          print(
+              "stderr: "
+              + completed.stderr.decode("ascii", errors="backslashreplace")
+          )
+          assert completed.returncode == 0, completed.stderr.decode(
+              "ascii", errors="backslashreplace"
+          )
+          assert completed.stdout, "native console encoding produced no stdout"
+          assert b"Traceback" not in completed.stderr, completed.stderr
+          assert b"UnicodeEncodeError" not in completed.stderr, completed.stderr
+          print("native Windows console encoding check passed")
+          PY
+
+      - name: Bash JSON-pair quoting
+        id: quoting_bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          export PATH="$VENV_BIN_BASH:$PATH"
+          DATA="$EVIDENCE_BASH/quoting/data.json"
+          OUT="$EVIDENCE_BASH/quoting/bash-out.xlsx"
+          jxcel "$DATA" --column-map '["/students","id"]' --column-map '["/orders","order,id"]' --exclude-map '["/orders","internal=status"]' -o "$OUT" 2>&1 | tee "$EVIDENCE_BASH/quoting-bash.log"
+          test -f "$EVIDENCE_BASH/quoting/bash-out.xlsx"
+
+      - name: PowerShell JSON-pair quoting (Windows)
+        id: quoting_pwsh
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cli = Join-Path $env:VENV_BIN 'jxcel.exe'
+          $data = Join-Path $env:EVIDENCE 'quoting\data.json'
+          $out = Join-Path $env:EVIDENCE 'quoting\pwsh-out.xlsx'
+          $log = Join-Path $env:EVIDENCE 'quoting-pwsh.log'
+          $output = & $cli $data --column-map '["/students","id"]' --column-map '["/orders","order,id"]' --exclude-map '["/orders","internal=status"]' -o $out 2>&1
+          $output | Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) {
+            throw "PowerShell quoting check failed with exit $LASTEXITCODE"
+          }
+          if (-not (Test-Path $out)) {
+            throw "PowerShell quoting check did not create output"
+          }
+
+      - name: Windows CMD JSON-pair quoting (Windows)
+        id: quoting_cmd
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: cmd
+        run: |
+          set "DATA=%EVIDENCE%\quoting\data.json"
+          set "OUT=%EVIDENCE%\quoting\cmd-out.xlsx"
+          set "LOG=%EVIDENCE%\quoting-cmd.log"
+          "%VENV_BIN%\jxcel.exe" "%DATA%" --column-map "[\"/students\",\"id\"]" --column-map "[\"/orders\",\"order,id\"]" --exclude-map "[\"/orders\",\"internal=status\"]" -o "%OUT%" > "%LOG%" 2>&1
+          if errorlevel 1 (
+            type "%LOG%"
+            exit /b 1
+          )
+          if not exist "%OUT%" (
+            echo CMD quoting check did not create output>> "%LOG%"
+            type "%LOG%"
+            exit /b 1
+          )
+          type "%LOG%"
+
+      - name: Upload Phase 8 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase8-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/jxcel-phase8-evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Enforce Phase 8 results
+        if: always()
+        run: |
+          set -uo pipefail
+          failed=0
+          require_success() {
+            name="$1"
+            outcome="$2"
+            echo "$name: $outcome"
+            if [ "$outcome" != "success" ]; then
+              failed=1
+            fi
+          }
+          require_skipped() {
+            name="$1"
+            outcome="$2"
+            echo "$name: $outcome"
+            if [ "$outcome" != "skipped" ]; then
+              failed=1
+            fi
+          }
+          require_success "unittest suite" "${{ steps.unittest.outcome }}"
+          require_success "CLI acceptance" "${{ steps.acceptance.outcome }}"
+          require_success "Bash quoting" "${{ steps.quoting_bash.outcome }}"
+          require_success "pipx installation" "${{ steps.pipx.outcome }}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            require_success "PowerShell quoting" "${{ steps.quoting_pwsh.outcome }}"
+            require_success "CMD quoting" "${{ steps.quoting_cmd.outcome }}"
+            require_success "native console encoding" "${{ steps.console_encoding.outcome }}"
+          else
+            require_skipped "PowerShell quoting" "${{ steps.quoting_pwsh.outcome }}"
+            require_skipped "CMD quoting" "${{ steps.quoting_cmd.outcome }}"
+            require_skipped "native console encoding" "${{ steps.console_encoding.outcome }}"
+          fi
+          if [ "$failed" -ne 0 ]; then
+            echo "::error title=Phase 8 validation failed::One or more required Phase 8 checks did not succeed; see the uploaded evidence artifact."
+            exit 1
+          fi
+          echo "All required Phase 8 checks succeeded."

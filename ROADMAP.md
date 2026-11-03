@@ -2,7 +2,7 @@
 
 ## Status and decision vocabulary
 
-This roadmap specifies the approved V1 target. The repository contains the package foundation and approved implementations for Phases 2–6. Phase 6 CLI integration is **COMPLETED and approved by the user**. Its initial independent QA review returned FAIL because stale Phase 6 status text in `AGENTS.md` and Section 15 contradicted the implementation; those statements were corrected, and the final QA recheck passed. Phases 7–9 have not started. Status labels are **Confirmed**, **Approved**, **Proposed**, **Deferred**, and **Open**. Confirmed requirements come directly from the product request. Approved decisions have explicit user approval. Proposed items are not settled. Deferred items are outside V1. Open items need a decision before dependent implementation.
+This roadmap specifies the approved V1 target. The repository contains the package foundation and implementations for Phases 2–7. Phase 6 CLI integration is **COMPLETED and approved by the user**. Its initial independent QA review returned FAIL because stale Phase 6 status text in `AGENTS.md` and Section 15 contradicted the implementation; those statements were corrected, and the final QA recheck passed. Phase 7 — Data Integrity and Error Hardening is **COMPLETED** with its evidence recorded in the Phase 7 entry. Phase 8 — Cross-Platform Validation is **PARTIAL and BLOCKED** on Windows and macOS, which were **NOT TESTED**; Phase 9 has not started. Status labels are **Confirmed**, **Approved**, **Proposed**, **Deferred**, and **Open**. Confirmed requirements come directly from the product request. Approved decisions have explicit user approval. Proposed items are not settled. Deferred items are outside V1. Open items need a decision before dependent implementation.
 
 ## 1. Product overview
 
@@ -140,7 +140,7 @@ jxcel data.json \
   --exclude-map '["/orders","internal=status"]'
 ```
 
-**PowerShell**
+**PowerShell (syntax example; not verified on Windows)**
 
 ```powershell
 jxcel data.json `
@@ -149,7 +149,7 @@ jxcel data.json `
   --exclude-map '["/orders","internal=status"]'
 ```
 
-**Windows CMD**
+**Windows CMD (syntax example; not verified on Windows)**
 
 ```bat
 jxcel data.json --column-map "[\"/students\",\"user.name\"]" --column-map "[\"/orders\",\"order,id\"]" --exclude-map "[\"/orders\",\"internal=status\"]"
@@ -157,7 +157,7 @@ jxcel data.json --column-map "[\"/students\",\"user.name\"]" --column-map "[\"/o
 
 Examples use simple ASCII pointers and names; JSON string values may contain Unicode and punctuation. Verify shell argument behavior on Windows before claiming the example works across all shells.
 
-Planned usage examples:
+Usage examples:
 
 ```text
 jxcel data.json
@@ -285,7 +285,7 @@ Each phase requires explicit user authorization. Completion of a phase does not 
 
 ### Phase 4 — Schema Planning and Transformation
 
-**Status: COMPLETED and approved by the user.** `build_plan()` and `prepared_rows()` are implemented in `src/jxcel/planning.py` with approved schema inference, flattening, mapping, validation-mode, warning, and limit behavior. Export validation prepares, validates, and retains an immutable snapshot of `PreparedValue` rows in `DatasetPlan.validated_rows`; `prepared_rows()` and workbook writing and saved-workbook validation consume only that snapshot. Later mutation of source record dictionaries therefore cannot change exported values. This closes JXCEL-001, the mutable-record data-integrity defect identified during independent review. Focused planning tests (100) and the full available suite (214) pass on Linux with Python 3.14.8, including regression tests for top-level, nested-dictionary, and nested-list mutation, record replacement, out-of-range values, and missing snapshots. The CLI remains unintegrated and no command-level export exists yet.
+**Status: COMPLETED and approved by the user.** `build_plan()` and `prepared_rows()` are implemented in `src/jxcel/planning.py` with approved schema inference, flattening, mapping, validation-mode, warning, and limit behavior. Export validation prepares, validates, and retains an immutable snapshot of `PreparedValue` rows in `DatasetPlan.validated_rows`; `prepared_rows()` and workbook writing and saved-workbook validation consume only that snapshot. Later mutation of source record dictionaries therefore cannot change exported values. This closes JXCEL-001, the mutable-record data-integrity defect identified during independent review. Focused planning tests (100) and the full available suite (214) pass on Linux with Python 3.14.8, including regression tests for top-level, nested-dictionary, and nested-list mutation, record replacement, out-of-range values, and missing snapshots. At the time of Phase 4 completion, the CLI was not yet integrated; Phase 6 later added command-level export.
 
 Known limitations: the snapshot retains one `PreparedValue` object per exported cell for the plan's lifetime (roughly 100 bytes per cell in the current representation), so memory use is proportional to the exported cell matrix, which openpyxl already holds in memory. Concurrent mutation of source records while `build_plan()` is running is unsupported; jxcel makes no general thread-safety claim. Constructing or forging internal plan objects directly can bypass validation and is outside the supported contract. The fix protects against accidental source mutation, not deliberate tampering with internal plan fields.
 
@@ -303,9 +303,9 @@ Known limitations: the snapshot retains one `PreparedValue` object per exported 
 
 ### Phase 5 — Excel Workbook Generation
 
-**Status: COMPLETED and approved by the user.** `src/jxcel/workbook.py` implements the approved Phase 5 API: `WorkbookError`, `SheetAssignment`, `SheetSummary`, `WorkbookExport`, `assign_sheet_names()`, `validate_output_destination()`, and `export_workbook()`. It provides deterministic worksheet naming, formatted normal-mode workbook generation, text/formula protection, temporary-file validation, safe same-directory `os.link`/`os.replace` publication, permission handling, and cleanup. Workbook writing and saved-workbook validation consume only the immutable planning snapshot through `prepared_rows()`; worksheet dimensions, auto-filter ranges, and `SheetSummary.data_rows` use `DatasetPlan.row_count`, so metadata remains consistent with the snapshot. Focused workbook tests (67) and the full available suite (214) pass on Linux with Python 3.14.8; the JXCEL-001 regression suite covers post-plan mutation and out-of-range publication; Phase 5 had previously passed independent QA, independent QA of the JXCEL-001 remediation returned PASS, and `git diff --check` is clean. The CLI remains unintegrated, so no command-level export exists yet.
+**Status: COMPLETED and approved by the user.** `src/jxcel/workbook.py` implements the approved Phase 5 API: `WorkbookError`, `SheetAssignment`, `SheetSummary`, `WorkbookExport`, `assign_sheet_names()`, `validate_output_destination()`, and `export_workbook()`. It provides deterministic worksheet naming, formatted normal-mode workbook generation, text/formula protection, temporary-file validation, safe same-directory `os.link`/`os.replace` publication, permission handling, and cleanup. Workbook writing and saved-workbook validation consume only the immutable planning snapshot through `prepared_rows()`; worksheet dimensions, auto-filter ranges, and `SheetSummary.data_rows` use `DatasetPlan.row_count`, so metadata remains consistent with the snapshot. Focused workbook tests (67) and the full available suite (214) pass on Linux with Python 3.14.8; the JXCEL-001 regression suite covers post-plan mutation and out-of-range publication; Phase 5 had previously passed independent QA, independent QA of the JXCEL-001 remediation returned PASS, and `git diff --check` is clean. At the time of Phase 5 completion, the CLI was not yet integrated; Phase 6 later added command-level export.
 
-Known limitations: Windows and macOS behavior has not been verified; validation uses openpyxl reopening and ZIP/XML inspection rather than Microsoft Excel or LibreOffice GUI opening; an interrupt exactly between temporary-file creation and its return from the private temp-creation helper could leave a temporary file as a Phase 7 hardening item; and export memory is proportional to the exported cell matrix, with the validated snapshot retaining one `PreparedValue` object per cell (roughly 100 bytes per cell in the current representation). No crash-durability/`fsync` guarantee is claimed.
+Known limitations: Windows and macOS behavior has not been verified; validation uses openpyxl reopening and ZIP/XML inspection rather than Microsoft Excel or LibreOffice GUI opening; an interrupt exactly between temporary-file creation and its return from the private temp-creation helper could leave a temporary file; and export memory is proportional to the exported cell matrix, with the validated snapshot retaining one `PreparedValue` object per cell (roughly 100 bytes per cell in the current representation). No crash-durability/`fsync` guarantee is claimed.
 
 1. **Objective:** create and validate formatted XLSX content from a valid plan.
 2. **Scope:** deterministic sheets, formatting, values, temporary file, validation, publication helpers.
@@ -327,9 +327,9 @@ Resolved CLI decisions: `--preview-rows` defaults to 5, must be positive, and re
 
 Focused CLI tests (47), reporting tests (13), and planning preview tests (9) pass; the final full-suite recheck passed all 283 tests on Linux with Python 3.14.8. Manual command checks covered positional and `-i` inputs, all inspection modes, preview plus dry-run, flattening, dataset and mapping selection, default and custom output paths, overwrite protection, input/output collision, missing parents, quiet and verbose output, and exit statuses. The initial QA review returned FAIL solely because stale status text described the CLI as unimplemented and Phase 6 as not started. Those documentation statements were corrected; the final QA recheck passed and Phase 6 is approved.
 
-Modified files: `AGENTS.md`, `README.md`, `ROADMAP.md`, `src/jxcel/__init__.py`, `src/jxcel/cli.py`, `src/jxcel/planning.py`, `src/jxcel/reporting.py`, `tests/test_cli.py`, `tests/test_planning.py`, and `tests/test_reporting.py`. The initial QA documentation finding JXCEL-CLI-001 was resolved, and the final QA recheck passed. Phase 6 is complete. Phase 7 remains not started and requires separate explicit authorization.
+Modified files: `AGENTS.md`, `README.md`, `ROADMAP.md`, `src/jxcel/__init__.py`, `src/jxcel/cli.py`, `src/jxcel/planning.py`, `src/jxcel/reporting.py`, `tests/test_cli.py`, `tests/test_planning.py`, and `tests/test_reporting.py`. The initial QA documentation finding JXCEL-CLI-001 was resolved, and the final QA recheck passed. Phase 6 is complete. Phase 7 was subsequently completed; see the Phase 7 entry. Phase 8 was subsequently authorized and is PARTIAL/BLOCKED; see the Phase 8 entry.
 
-Known limitations: report wording and layout are not a stable machine-readable interface; broken-pipe handling and console-encoding hardening remain for Phase 7; Windows and macOS behavior has not been verified.
+Known limitations: report wording and layout are not a stable machine-readable interface; broken-pipe handling and console-encoding hardening were completed in Phase 7; Windows and macOS behavior has not been verified.
 
 1. **Objective:** expose approved operations and options through `jxcel`.
 2. **Scope:** argument parsing, mode interactions, orchestration, output/error codes.
@@ -360,6 +360,41 @@ Known limitations: report wording and layout are not a stable machine-readable i
 11. **Later dependencies:** release/platform acceptance.
 
 ### Phase 8 — Cross-Platform Validation
+
+**Status: PARTIAL (BLOCKED on Windows and macOS validation).** Linux passed the exercised Phase 8 matrix. Windows and macOS were **NOT TESTED** because no real environments were accessible; no platform result was simulated. The phase cannot be marked COMPLETED or PASS while two required platforms remain unverified.
+
+**Linux evidence (actual results):**
+
+- Environment: Fedora Linux 44 (Workstation Edition), kernel `7.2.13-200.fc44.x86_64`, x86_64, Bash 5.3.9, Python 3.14.8, pip 26.0.1. System `pipx` was absent; `pipx` 1.18.11 was installed into a temporary virtual environment and isolated with `PIPX_HOME`/`PIPX_BIN_DIR` under `/tmp/opencode`.
+- Installation:
+
+  ```bash
+  python3 -m venv /tmp/opencode/jxcel-phase8-437120/venv
+  /tmp/opencode/jxcel-phase8-437120/venv/bin/python -m pip install /home/abutaha/Github/jxcel
+  ```
+
+  Exit 0; `jxcel 0.1.0a0`, `openpyxl 3.1.5`, `et-xmlfile 2.0.0`; `pip check` reported no broken requirements. `PIPX_HOME=... PIPX_BIN_DIR=... pipx install /home/abutaha/Github/jxcel` also exited 0 and produced a working isolated `jxcel` command. An offline `pip install --no-index .` failed because build isolation requires `setuptools>=77.0.3`; installation therefore needs an index or a populated build-dependency cache.
+- PATH and outside-checkout execution: with the isolated environment first on `PATH` and `PYTHONPATH`/`PYTHONHOME` unset, `command -v jxcel` resolved to the temporary environment. Running from `/tmp/opencode/.../othercwd` against copied data created and reopened a valid workbook; the package imported from the virtual environment, not the checkout.
+- CLI matrix (exit status and behavior observed):
+  - `--version` returned `jxcel 0.1.0a0`; `--help` printed full usage; both exited 0.
+  - Positional input and `-i/--input`; `-o/--output`; relative paths; absolute paths; and Unicode input/output directory and file names all worked. The default output was written beside the input with an `.xlsx` suffix.
+  - Existing output without `--overwrite` exited 1 with `Output file already exists (use --overwrite)` and left the destination SHA-256 unchanged. With `--overwrite`, conversion exited 0, produced a valid workbook, and preserved the existing file's permission bits.
+  - A missing output parent exited 1 without creating a directory; an output parent that was a file exited 1; an input/output collision, including a symlink alias, exited 1 without changing the input.
+  - Repeated `--dataset` / `-d` produced the requested sheets. Repeated `--column-map` and `--exclude-map` applied in order, exclusion took precedence, and names containing commas, equals signs, quotes, and Unicode matched exactly. Unknown pointers, unknown columns, malformed pairs, and three-element pairs failed clearly; a valid mapping for an unselected dataset was reported as validated but unapplied.
+  - `--preview`, `--preview --preview-rows`, `--dry-run`, and `--preview --dry-run` behaved as documented. Inspection modes made no workbook, temporary file, or directory; a before/after name/size/mtime/SHA-256 snapshot reported no change.
+  - Exit 0 covered version, help, list, preview, dry-run, preview+dry-run, and conversion. Exit 1 covered missing input, invalid JSON, unknown selection or mapping, destination failures, input/output collision, and conversion with no exportable dataset. Exit 2 covered no arguments, conflicting input forms, invalid mode combinations, preview with `--output`/`--overwrite`, invalid `--preview-rows`, unknown options, and `--quiet` with `--verbose`.
+  - Publication does not fall back from `os.link` to replace or rename. Successful and race-failure runs left no `.jxcel-*.tmp.xlsx` file. A destination directory created after validation caused a clear exit-1 publication error in both modes; an externally killed process can still leave a temporary file, consistent with the absence of a crash-durability claim.
+- Hard links: `os.link` worked on the Linux `tmpfs` used for all test output (same inode, transiently `nlink=2` during publication; the final destination has `nlink=1` after the temporary name is removed). `/home` is `btrfs`, but publication there was not exercised. FAT32/exFAT, SMB-style network mounts, Windows, and macOS hard-link behavior remain untested.
+- Cross-check: the full suite passed on Linux with Python 3.14.8: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest discover -s tests` — 299 tests. A wheel and sdist built from an exact `git archive HEAD` snapshot; the wheel contained all seven package modules, the entry point `jxcel = jxcel.cli:main`, and the declared dependency. These packaging checks are supporting evidence only; packaging/release metadata decisions remain Phase 9 scope.
+- Defects: no confirmed Phase 8 product defect was found, so no code was changed.
+
+**Windows — NOT TESTED.** No Windows host, WSL, Wine, PowerShell, Windows mount, Windows container, or Windows image was available. Read-only inspection identified risks that require real validation: `os.link`/`os.replace` semantics and permissions on NTFS versus exFAT/FAT32 or network filesystems; path and console-encoding behavior; broken-pipe behavior outside POSIX; and PowerShell/CMD quoting of JSON pairs. None of these behaviors is verified.
+
+**macOS — NOT TESTED.** No macOS host, virtual machine, container, remote target, or CI runner was available. Read-only inspection identified risks that require real validation: hard-link and replacement support on APFS and network filesystems; POSIX permission and extended-attribute behavior; Unicode normalization in paths; and shell quoting. None of these behaviors is verified.
+
+**Remaining Phase 8 work:** run the same matrix on real Windows and macOS environments, record OS/Python/pipx versions and exact outcomes, test PowerShell and the platform shell quoting, and exercise no-overwrite/overwrite publication on each platform's declared filesystems. Until then, Phase 8 remains PARTIAL/BLOCKED and no cross-platform support claim is made.
+
+**Modified files:** `.github/workflows/phase8-cross-platform.yml` (new manual GitHub Actions workflow for Windows and macOS validation), `tests/test_cli.py` and `tests/test_reporting.py` (path-rendering portability fixes so the assertions match the production `repr` formatting on Windows as well as POSIX), and `README.md`, `ROADMAP.md`, `AGENTS.md` (documentation). No `src/jxcel/` source files changed.
 
 1. **Objective:** verify installation and command use on Linux, Windows, and macOS.
 2. **Scope:** isolated install, PATH, shell arguments, path handling, publication behavior, exit codes.
@@ -429,9 +464,9 @@ Tests must be implemented as phases introduce behavior; this table specifies exp
 
 ## 10. Cross-platform acceptance
 
-Test Linux, Windows, and macOS separately. On each platform, record OS version, Python version, install method, exact commands, and outcomes. Verify isolated package installation (recommended user workflow: `pipx` once the CLI is functional), command availability, execution outside the checkout, relative and absolute paths, Unicode paths where practical, shell-specific pair quoting, output location, exit codes, and hard-link/replace behavior.
+Test Linux, Windows, and macOS separately. On each platform, record OS version, Python version, install method, exact commands, and outcomes. Verify isolated package installation (recommended user workflow: `pipx`), command availability, execution outside the checkout, relative and absolute paths, Unicode paths where practical, shell-specific pair quoting, output location, exit codes, and hard-link/replace behavior.
 
-The project is designed for those operating systems; it is not yet verified on any of them. Filesystem hard-link support and replacement restrictions vary. If no-overwrite hard links cannot be created, fail safely and report the limitation.
+The project is designed for those operating systems. Linux has been exercised; Windows and macOS are not yet verified. Filesystem hard-link support and replacement restrictions vary. If no-overwrite hard links cannot be created, fail safely and report the limitation. No-overwrite publication creates a same-directory hard link and never falls back to replace or rename.
 
 ## 11. V1 acceptance checklist
 
@@ -508,7 +543,7 @@ The project is designed for those operating systems; it is not yet verified on a
 | Empty planned column names are preserved | Approved | Do not synthesize labels or discard columns for empty JSON keys. |
 | Empty nested objects produce no flattened column | Approved | Flattening omits them; `--no-flatten` serializes `{}` in the parent column as specified. |
 | Test/lint/format/type-check tooling beyond `unittest` | Open | No extra tooling selected; do not invent commands. |
-| Default preview row count and verbose/quiet interaction | Open | Must be finalized during CLI phase before implementation. |
+| Default preview row count and verbose/quiet interaction | Approved (resolved in Phase 6) | `--preview-rows` defaults to 5 and must be a positive integer; `--quiet` and `--verbose` are mutually exclusive. |
 
 ## 14. Packaging and installation
 
@@ -516,8 +551,8 @@ Use PEP 621 metadata in `pyproject.toml`, a `src/` package, and `[project.script
 
 Python minimum is `>=3.11`: at foundation creation, Python 3.10 reached end of life on 2026-10-01, while 3.11 remains in security support until 2027-10. openpyxl 3.1.5 declares Python >=3.8, so it does not require a higher floor. Revisit this floor over time. References: [Python version status](https://devguide.python.org/versions/), [openpyxl on PyPI](https://pypi.org/project/openpyxl/), [Python Packaging User Guide: `pyproject.toml`](https://packaging.python.org/en/latest/guides/writing-pyproject-toml/).
 
-Once functional, recommend isolated installation with `pipx`: for a published distribution, `pipx install jxcel`; for a local checkout, `pipx install .`. Document per-platform `pipx` setup and PATH configuration at release. Do not claim publication, PyPI name availability, or completed install validation.
+Recommend isolated installation with `pipx`: for a published distribution, `pipx install jxcel`; for a local checkout, `pipx install .`. On Linux, `pipx install .` and `python -m pip install .` were verified in isolated temporary environments during Phase 8. Per-platform `pipx` setup and PATH configuration still need validation on Windows and macOS. Do not claim publication, PyPI name availability, or completed cross-platform install validation.
 
 ## 15. Current status and next phase
 
-Current status: Phase 2 JSON loading and validation is **COMPLETED and approved by the user**. Its focused and full available test suites passed (25 tests), and independent QA passed. Phase 3 — Dataset Discovery is **COMPLETED and approved by the user**: `discover()` is implemented in `src/jxcel/discovery.py`, focused discovery tests (22) and the full available suite (47) passed on Linux with Python 3.14.8, and independent QA passed. Phase 4 — Schema Planning and Transformation is **COMPLETED and approved by the user**: planning is implemented in `src/jxcel/planning.py`, focused planning tests (100) and the full available suite (214) pass on Linux with Python 3.14.8. The JXCEL-001 mutable-record defect identified during independent review is fixed: export validation retains an immutable prepared-value snapshot that `prepared_rows()` and workbook export consume, and regression tests cover top-level, nested-dictionary, and nested-list mutation, record replacement, missing snapshots, and out-of-range values. Concurrent mutation during planning is unsupported, and snapshot memory is proportional to the exported cell matrix. Phase 5 — Excel Workbook Generation is **COMPLETED and approved by the user**: `src/jxcel/workbook.py` implements worksheet naming, formatted workbook generation, text/formula protection, temporary-file validation, safe no-overwrite and overwrite publication, permission handling, and cleanup. Workbook row counts, auto-filters, and summaries derive from the validated snapshot. Focused workbook tests (67) and the full available suite (214) pass on Linux with Python 3.14.8; Phase 5 previously passed independent QA, independent QA of the JXCEL-001 remediation returned PASS, and `git diff --check` is clean. Windows and macOS, Excel/LibreOffice GUI opening, and crash durability have not been verified. Phase 6 — CLI Integration is **COMPLETED and approved by the user**: the initial QA review returned FAIL because stale Phase 6 status text in `AGENTS.md` and this section contradicted the implemented CLI; JXCEL-CLI-001 was resolved by correcting those statements. The final QA recheck passed all 283 tests, `git diff --check`, and representative CLI scenarios. Phase 7 — Data Integrity and Error Hardening is **COMPLETED** with the implementation and final QA evidence recorded in its phase entry. Phase 8 remains **NOT STARTED** and requires separate explicit authorization.
+Current status: Phase 2 JSON loading and validation is **COMPLETED and approved by the user**. Its focused and full available test suites passed (25 tests), and independent QA passed. Phase 3 — Dataset Discovery is **COMPLETED and approved by the user**: `discover()` is implemented in `src/jxcel/discovery.py`, focused discovery tests (22) and the full available suite (47) passed on Linux with Python 3.14.8, and independent QA passed. Phase 4 — Schema Planning and Transformation is **COMPLETED and approved by the user**: planning is implemented in `src/jxcel/planning.py`, focused planning tests (100) and the full available suite (214) pass on Linux with Python 3.14.8. The JXCEL-001 mutable-record defect identified during independent review is fixed: export validation retains an immutable prepared-value snapshot that `prepared_rows()` and workbook export consume, and regression tests cover top-level, nested-dictionary, and nested-list mutation, record replacement, missing snapshots, and out-of-range values. Concurrent mutation during planning is unsupported, and snapshot memory is proportional to the exported cell matrix. Phase 5 — Excel Workbook Generation is **COMPLETED and approved by the user**: `src/jxcel/workbook.py` implements worksheet naming, formatted workbook generation, text/formula protection, temporary-file validation, safe no-overwrite and overwrite publication, permission handling, and cleanup. Workbook row counts, auto-filters, and summaries derive from the validated snapshot. Focused workbook tests (67) and the full available suite (214) pass on Linux with Python 3.14.8; Phase 5 previously passed independent QA, independent QA of the JXCEL-001 remediation returned PASS, and `git diff --check` is clean. Windows and macOS, Excel/LibreOffice GUI opening, and crash durability have not been verified. Phase 6 — CLI Integration is **COMPLETED and approved by the user**: the initial QA review returned FAIL because stale Phase 6 status text in `AGENTS.md` and this section contradicted the implemented CLI; JXCEL-CLI-001 was resolved by correcting those statements. The final QA recheck passed all 283 tests, `git diff --check`, and representative CLI scenarios. Phase 7 — Data Integrity and Error Hardening is **COMPLETED** with the implementation and final QA evidence recorded in its phase entry. Phase 8 — Cross-Platform Validation is **PARTIAL and BLOCKED**: Linux passed the exercised installation, CLI, path, exit-status, no-write, and publication checks with Python 3.14.8, while Windows and macOS were **NOT TESTED** because no real environments were available. The full Linux suite passed (299 tests). No Phase 8 code defect was confirmed, so no source changes were made. Phase 8 cannot be marked COMPLETED or PASS until real Windows and macOS evidence is recorded; Phase 9 is not started and requires separate explicit authorization.

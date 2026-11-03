@@ -241,11 +241,12 @@ class PlanRenderingTests(unittest.TestCase):
         findings = (
             StructureFinding(pointer="/notes", kind="mixed_array"),
         )
+        output_path = Path("/tmp/out.xlsx")
 
         rendered = render_plan(
             result.datasets,
             findings,
-            Path("/tmp/out.xlsx"),
+            output_path,
             overwrite=False,
             mapping_outcomes=tuple(
                 reversed(result.mapping_outcomes)
@@ -257,7 +258,7 @@ class PlanRenderingTests(unittest.TestCase):
             "\n".join(
                 [
                     "Dry run: no workbook will be written.",
-                    "Output: '/tmp/out.xlsx'",
+                    f"Output: {str(output_path)!r}",
                     "Overwrite: no",
                     "Datasets: 2",
                     "  '/students': 2 rows, 1 column",

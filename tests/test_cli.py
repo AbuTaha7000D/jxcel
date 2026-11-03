@@ -171,7 +171,7 @@ class ArgumentParsingTests(CliTestCase):
             with self.subTest(mode=mode):
                 code, stdout, _ = self.run_cli(path, mode, "--verbose")
                 self.assertEqual(code, 0)
-                self.assertIn(f"Input: '{path}'", stdout)
+                self.assertIn(f"Input: {str(path)!r}", stdout)
 
     def test_quiet_inspection_modes_still_show_their_reports(self):
         path = self.write_json(SAMPLE)
@@ -482,7 +482,7 @@ class DryRunTests(CliTestCase):
 
         self.assertEqual(code, 0)
         self.assertIn("Dry run: no workbook will be written.", stdout)
-        self.assertIn(f"Output: '{self.root / 'data.xlsx'}'", stdout)
+        self.assertIn(f"Output: {str(self.root / 'data.xlsx')!r}", stdout)
         self.assertIn("Datasets: 2", stdout)
         self.assertIn("columns: id, user.name, tags", stdout)
         self.assertIn("nested_value_as_json_text", stdout)
@@ -497,7 +497,7 @@ class DryRunTests(CliTestCase):
         )
 
         self.assertEqual(code, 0)
-        self.assertIn(f"Input: '{path}'", stdout)
+        self.assertIn(f"Input: {str(path)!r}", stdout)
         self.assertIn("sheet: 'students'", stdout)
         self.assertIn("sheet: 'orders'", stdout)
         self.assertEqual(self.names(), ["data.json"])
@@ -724,7 +724,7 @@ class ConversionTests(CliTestCase):
         code, stdout, _ = self.run_cli(path, "--verbose")
 
         self.assertEqual(code, 0)
-        self.assertIn(f"Input: '{path}'", stdout)
+        self.assertIn(f"Input: {str(path)!r}", stdout)
         self.assertIn("Exported:", stdout)
 
     def test_formula_like_strings_remain_text(self):
