@@ -1082,10 +1082,11 @@ class PublicationTests(unittest.TestCase):
                     finally:
                         workbook.close()
                 except PermissionError as exc:
-                    if not (
-                        os.name == "nt"
-                        and getattr(exc, "winerror", None) in {5, 32, 33}
-                    ):
+                    # Windows may deny a path-based open while replacement
+                    # contends with a reader handle. Final validation below
+                    # checks that this was transient and the exact workbook
+                    # content remained intact.
+                    if os.name != "nt":
                         failures.append(f"reader could not open workbook: {exc!r}")
                 except Exception as exc:
                     failures.append(f"reader observed invalid workbook: {exc!r}")
@@ -1107,10 +1108,7 @@ class PublicationTests(unittest.TestCase):
                     try:
                         workbook = load_workbook(output, data_only=False)
                     except PermissionError as exc:
-                        if not (
-                            os.name == "nt"
-                            and getattr(exc, "winerror", None) in {5, 32, 33}
-                        ):
+                        if os.name != "nt":
                             raise
                     else:
                         try:
@@ -1127,24 +1125,24 @@ class PublicationTests(unittest.TestCase):
             finished.set()
             reader.join(timeout=20)
         self.assertFalse(reader.is_alive())
+        workbook = load_workbook(output, data_only=False)
+        try:
+            self.assertEqual(workbook["data"]["A2"].value, current_value)
+        finally:
+            workbook.close()
         if os.name == "nt" and successful_replacements == 0:
-            # Windows may deny replacement while readers hold handles without
-            # delete sharing. Confirm the prior workbook is intact, then verify
+            # Windows may deny replacement while readers hold handles. Verify
             # overwrite succeeds once the readers close.
-            workbook = load_workbook(output, data_only=False)
-            try:
-                self.assertEqual(workbook["data"]["A2"].value, current_value)
-            finally:
-                workbook.close()
             plan = make_plan(records=({"a": "generation-after-readers"},))
             export_workbook([plan], output, overwrite=True)
             successful_replacements += 1
+            current_value = "generation-after-readers"
         self.assertGreater(successful_replacements, 0)
         self.assertTrue(reads, "the reader did not observe a published workbook")
         self.assertEqual(failures, [])
         final_workbook = load_workbook(output, data_only=False)
         try:
-            self.assertTrue(final_workbook["data"]["A2"].value.startswith("generation-"))
+            self.assertEqual(final_workbook["data"]["A2"].value, current_value)
         finally:
             final_workbook.close()
 
