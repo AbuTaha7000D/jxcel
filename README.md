@@ -6,7 +6,7 @@
 
 The converter is functional. JSON loading and validation, dataset discovery, schema planning and value preparation, workbook generation with validated publication, and command-line integration are implemented in `src/jxcel/`. The package has not been published.
 
-Current cross-platform release verification passed in GitHub Actions run [41932837972](https://github.com/AbuTaha7000D/jxcel/actions/runs/41932837972) on commit `72aa74f56b99a96a3f8989ea59e6eb49165d5b8e`. All 12 Linux, Windows, and macOS × Python 3.11–3.14 jobs passed. Each ran the full 309-test suite and 25 CLI acceptance checks; Windows skipped three POSIX-only permission tests. The workflow also built and inspected wheel and source distributions, installed them in separate environments, and verified pipx installation.
+Current cross-platform release verification passed in GitHub Actions run [41933979297](https://github.com/AbuTaha7000D/jxcel/actions/runs/41933979297) on commit `6d2e5e3f3f0b9cb4a0b7985847a496be744cc1e7`. All 12 Linux, Windows, and macOS × Python 3.11–3.14 jobs passed. Each ran the full 309-test suite and 25 CLI acceptance checks; Windows skipped three POSIX-only permission tests. The workflow also built and inspected wheel and source distributions, installed them in separate environments, and verified pipx installation.
 
 The earlier Phase 8 run [41666703215](https://github.com/AbuTaha7000D/jxcel/actions/runs/41666703215) validated commit `f351669e6ed5ef072eb888e9a2f2f85401832210` on Windows and macOS with the original 299-test suite.
 
@@ -14,7 +14,7 @@ Release notes for version `0.1.0` are in [RELEASE_NOTES.md](https://github.com/A
 
 ## Requirements
 
-- Python 3.11 or newer is declared. Python 3.11, 3.12, 3.13, and 3.14 have all been exercised on Ubuntu 24.04, Windows 2025, and macOS 15 in run 41932837972.
+- Python 3.11 or newer is declared. Python 3.11, 3.12, 3.13, and 3.14 have all been exercised on Ubuntu 24.04, Windows 2025, and macOS 15 in run 41933979297.
 - Runtime dependencies: the Python standard library and `openpyxl`.
 - Linux, Windows, and macOS are intended targets. All three have been exercised: Linux locally, and Windows and macOS on GitHub-hosted runners in Phase 8.
 
@@ -167,7 +167,7 @@ Choose an output directory whose access controls are appropriate for the workboo
 
 ## Platform validation
 
-The current 12-combination matrix passed in [GitHub Actions run 41932837972](https://github.com/AbuTaha7000D/jxcel/actions/runs/41932837972), validating commit `72aa74f56b99a96a3f8989ea59e6eb49165d5b8e`.
+The current 12-combination matrix passed in [GitHub Actions run 41933979297](https://github.com/AbuTaha7000D/jxcel/actions/runs/41933979297), validating commit `6d2e5e3f3f0b9cb4a0b7985847a496be744cc1e7`.
 
 | Platform | Status | Evidence |
 |---|---|---|
@@ -209,9 +209,11 @@ set PYTHONPATH=src
 python -m unittest discover -s tests
 ```
 
-## PyPI release process
+## GitHub and PyPI release process
 
-The manually dispatched [PyPI workflow](.github/workflows/publish.yml) builds a wheel and source distribution. Its `publish` input defaults to `false`; publishing runs only when it is explicitly set to `true` on `main`. Do not enable that input without separate authorization to publish this release.
+Create each GitHub Release from a version tag (for example, `v0.1.0`) pointing to the reviewed release commit on `main`. GitHub provides source archives for the tag. Creating a GitHub Release does not publish a Python package to PyPI.
+
+The manually dispatched [PyPI workflow](.github/workflows/publish.yml) builds a wheel and source distribution. Its `publish` input defaults to `false`; the publishing job is eligible only when the workflow is dispatched with `publish=true` from a tag whose name begins with `v`. The tag must identify the reviewed release commit. Do not enable that input without separate authorization to publish this release.
 
 The workflow uses [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/) and does not store a PyPI token. Before first publication, configure the PyPI trusted publisher for owner `AbuTaha7000D`, repository `jxcel`, workflow `.github/workflows/publish.yml`, and GitHub environment `pypi`. Configure that GitHub environment with the required release reviewers. The project currently has no PyPI registration; PyPI's [trusted publisher project creation](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/) flow can register it during an explicitly authorized first publish.
 

@@ -42,7 +42,7 @@ jobs:
 
   publish:
     name: Publish with PyPI Trusted Publishing
-    if: ${{ inputs.publish && github.ref == 'refs/heads/main' }}
+    if: ${{ inputs.publish && startsWith(github.ref, 'refs/tags/v') }}
     needs: build
     runs-on: ubuntu-24.04
     environment:

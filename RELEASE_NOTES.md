@@ -38,7 +38,7 @@ Both commands install a `jxcel` command that points at `jxcel.cli:main`. The bui
 
 ## Validation evidence
 
-- The 309-test `unittest` suite passed on all 12 supported OS/Python combinations in [GitHub Actions run 41932837972](https://github.com/AbuTaha7000D/jxcel/actions/runs/41932837972), commit `72aa74f56b99a96a3f8989ea59e6eb49165d5b8e`. Windows skipped three POSIX-only permission tests per job.
+- The 309-test `unittest` suite passed on all 12 supported OS/Python combinations in [GitHub Actions run 41933979297](https://github.com/AbuTaha7000D/jxcel/actions/runs/41933979297), commit `6d2e5e3f3f0b9cb4a0b7985847a496be744cc1e7`. Windows skipped three POSIX-only permission tests per job.
 - Linux, Windows, and macOS each passed 25 CLI acceptance checks on Python 3.11, 3.12, 3.13, and 3.14.
 - The matrix built and inspected the wheel and source distribution, installed each into isolated environments, and verified pipx installation and CLI conversion.
 
@@ -46,7 +46,7 @@ Both commands install a `jxcel` command that points at `jxcel.cli:main`. The bui
 
 - The complete JSON document and the export snapshot are held in memory; jxcel is not a streaming converter.
 - No-overwrite publication relies on hard links, so it depends on filesystem support. Filesystems without hard-link support fail with an explicit error rather than falling back.
-- Windows/macOS and Python 3.11–3.14 compatibility was verified on the named GitHub-hosted runner images in run 41932837972; other operating-system releases, architectures, and filesystems were not tested.
+- Windows/macOS and Python 3.11–3.14 compatibility was verified on the named GitHub-hosted runner images in run 41933979297; other operating-system releases, architectures, and filesystems were not tested.
 - There is no graphical user interface; jxcel is a command-line tool only.
 - The package is not published, so there is no supported installation from a package index.
 - Workbook contents were validated by reopening the generated file with openpyxl; opening the workbook in Excel or LibreOffice was not verified.
