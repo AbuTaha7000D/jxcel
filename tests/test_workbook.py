@@ -1081,12 +1081,19 @@ class PublicationTests(unittest.TestCase):
                             reads.append(value)
                     finally:
                         workbook.close()
+                except PermissionError as exc:
+                    if not (
+                        os.name == "nt"
+                        and getattr(exc, "winerror", None) in {5, 32, 33}
+                    ):
+                        failures.append(f"reader could not open workbook: {exc!r}")
                 except Exception as exc:
                     failures.append(f"reader observed invalid workbook: {exc!r}")
 
         reader = threading.Thread(target=read_until_done, daemon=True)
         reader.start()
         successful_replacements = 0
+        current_value = "generation-0"
         try:
             self.assertTrue(ready.wait(timeout=10))
             start.wait(timeout=20)
@@ -1097,14 +1104,41 @@ class PublicationTests(unittest.TestCase):
                 except WorkbookError:
                     # Some platforms may refuse replacing a file opened by a
                     # concurrent reader. The destination must still be readable.
-                    workbook = load_workbook(output, data_only=False)
-                    workbook.close()
+                    try:
+                        workbook = load_workbook(output, data_only=False)
+                    except PermissionError as exc:
+                        if not (
+                            os.name == "nt"
+                            and getattr(exc, "winerror", None) in {5, 32, 33}
+                        ):
+                            raise
+                    else:
+                        try:
+                            self.assertEqual(
+                                workbook["data"]["A2"].value,
+                                current_value,
+                            )
+                        finally:
+                            workbook.close()
                 else:
                     successful_replacements += 1
+                    current_value = f"generation-{generation}"
         finally:
             finished.set()
             reader.join(timeout=20)
         self.assertFalse(reader.is_alive())
+        if os.name == "nt" and successful_replacements == 0:
+            # Windows may deny replacement while readers hold handles without
+            # delete sharing. Confirm the prior workbook is intact, then verify
+            # overwrite succeeds once the readers close.
+            workbook = load_workbook(output, data_only=False)
+            try:
+                self.assertEqual(workbook["data"]["A2"].value, current_value)
+            finally:
+                workbook.close()
+            plan = make_plan(records=({"a": "generation-after-readers"},))
+            export_workbook([plan], output, overwrite=True)
+            successful_replacements += 1
         self.assertGreater(successful_replacements, 0)
         self.assertTrue(reads, "the reader did not observe a published workbook")
         self.assertEqual(failures, [])

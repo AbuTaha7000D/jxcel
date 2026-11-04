@@ -67,7 +67,68 @@ class LoadJsonTests(unittest.TestCase):
 
         self.assertIn(str(path), str(caught.exception))
         self.assertIn("nesting", str(caught.exception).lower())
-        self.assertIsInstance(caught.exception.__cause__, RecursionError)
+        self.assertIsNone(caught.exception.__cause__)
+
+    def test_brackets_inside_json_strings_do_not_count_as_nesting(self):
+        path = self.write_text(
+            "brackets-in-string.json",
+            '["' + "[{}]" * 2_000 + '"]',
+        )
+
+        self.assertEqual(load_json(path), ["[{}]" * 2_000])
+
+    def test_array_nesting_at_supported_limit_is_accepted(self):
+        depth = 500
+        path = self.write_text(
+            "arrays-at-depth-limit.json",
+            "[" * depth + "0" + "]" * depth,
+        )
+
+        value = load_json(path)
+        for _ in range(depth):
+            self.assertIsInstance(value, list)
+            self.assertEqual(len(value), 1)
+            value = value[0]
+        self.assertEqual(value, 0)
+
+    def test_array_nesting_above_supported_limit_is_rejected(self):
+        depth = 501
+        path = self.write_text(
+            "arrays-over-depth-limit.json",
+            "[" * depth + "0" + "]" * depth,
+        )
+
+        with self.assertRaises(JsonLoadError) as caught:
+            load_json(path)
+
+        self.assertIn(str(path), str(caught.exception))
+        self.assertIn("500", str(caught.exception))
+
+    def test_object_nesting_at_supported_limit_is_accepted(self):
+        depth = 500
+        path = self.write_text(
+            "objects-at-depth-limit.json",
+            '{"a":' * depth + "0" + "}" * depth,
+        )
+
+        value = load_json(path)
+        for _ in range(depth):
+            self.assertIsInstance(value, dict)
+            value = value["a"]
+        self.assertEqual(value, 0)
+
+    def test_object_nesting_above_supported_limit_is_rejected(self):
+        depth = 501
+        path = self.write_text(
+            "objects-over-depth-limit.json",
+            '{"a":' * depth + "0" + "}" * depth,
+        )
+
+        with self.assertRaises(JsonLoadError) as caught:
+            load_json(path)
+
+        self.assertIn(str(path), str(caught.exception))
+        self.assertIn("500", str(caught.exception))
 
     def test_trailing_content_is_rejected(self):
         path = self.write_text("trailing.json", "{} {}")

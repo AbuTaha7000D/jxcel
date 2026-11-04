@@ -216,6 +216,7 @@ The workflow uses [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publis
 ## Limitations
 
 - The complete JSON document and the export snapshot are held in memory; jxcel is not a streaming converter.
+- JSON documents nested more than 500 object/array levels are rejected with a path-aware error. This fixed limit avoids interpreter-dependent parser behavior and excessive discovery paths; brackets inside strings do not count.
 - Concurrent mutation of source records while a plan is being built is unsupported. Constructing or forging internal plan objects directly can bypass validation and is outside the supported contract.
 - Windows and macOS behavior for the prior Phase 8 code was verified on GitHub-hosted `windows-2025` and `macos-15` runners; the current audit changes have not yet been rerun there.
 - Hard-link publication depends on filesystem support and was exercised on Linux `tmpfs` and the Windows and macOS runner temporary filesystems; other filesystem types were not tested.

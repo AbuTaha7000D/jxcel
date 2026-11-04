@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Any
 
 
+_MAX_JSON_NESTING_DEPTH = 500
+
+
 class JsonLoadError(Exception):
     """A path-aware error raised when a JSON document cannot be loaded."""
 
@@ -72,6 +75,30 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _exceeds_nesting_limit(document: str) -> bool:
+    """Check container depth without counting brackets inside JSON strings."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in document:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > _MAX_JSON_NESTING_DEPTH:
+                return True
+        elif character in "]}" and depth:
+            depth -= 1
+    return False
+
+
 def load_json(path: str | os.PathLike[str]) -> object:
     """Load and validate one complete UTF-8 JSON document from *path*.
 
@@ -93,6 +120,12 @@ def load_json(path: str | os.PathLike[str]) -> object:
 
     if not document.strip(" \t\r\n"):
         raise JsonLoadError(f"JSON file is empty: {input_path}")
+
+    if _exceeds_nesting_limit(document):
+        raise JsonLoadError(
+            f"JSON nesting exceeds jxcel's supported limit of "
+            f"{_MAX_JSON_NESTING_DEPTH} in {input_path}"
+        )
 
     try:
         return json.loads(
