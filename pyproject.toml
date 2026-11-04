@@ -4,21 +4,32 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jxcel"
-version = "0.1.0a0"
+version = "0.1.0"
 description = "A cross-platform CLI for converting JSON datasets into Excel workbooks"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  {name = "Mahmoud Ehab"},
+]
+keywords = ["json", "excel", "xlsx", "cli", "converter"]
 dependencies = ["openpyxl>=3.1.5,<4"]
 classifiers = [
-  "Development Status :: 1 - Planning",
+  "Development Status :: 4 - Beta",
   "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Topic :: Utilities",
 ]
+
+[project.urls]
+"Source" = "https://github.com/abutaha7000d/jxcel"
 
 [project.scripts]
 jxcel = "jxcel.cli:main"

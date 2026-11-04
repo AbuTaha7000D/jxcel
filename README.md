@@ -6,13 +6,15 @@
 
 The converter is functional. JSON loading and validation, dataset discovery, schema planning and value preparation, workbook generation with validated publication, and command-line integration are implemented in `src/jxcel/`. The package has not been published.
 
-Phase 8 cross-platform validation is **partial**. Linux installation and command behavior passed the exercised checks with Python 3.14.8. Windows and macOS were **not tested** because no real environments were available; their behavior, path handling, shell quoting, and publication semantics remain unverified. See [ROADMAP.md](ROADMAP.md#phase-8--cross-platform-validation) for the evidence and remaining platform work.
+Phase 8 cross-platform validation is **complete**. The manual GitHub Actions workflow run `41666703215`, validating commit `f351669e6ed5ef072eb888e9a2f2f85401832210`, passed on both Windows (`windows-2025`, X64) and macOS (`macos-15`, ARM64). Both platforms passed all 25 acceptance checks and ran the 299-test suite; Windows skipped 2 POSIX-only permission-bit tests, and macOS had no skips. See [ROADMAP.md](ROADMAP.md#phase-8--cross-platform-validation) for the evidence.
+
+Release notes for version `0.1.0` are in [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 ## Requirements
 
-- Python 3.11 or newer. Only Python 3.14.8 has been exercised so far.
+- Python 3.11 or newer. Only Python 3.14 has been exercised so far: 3.14.8 on Linux and 3.14.10 on the Windows and macOS CI runners.
 - Runtime dependencies: the Python standard library and `openpyxl`.
-- Linux, Windows, and macOS are intended targets. Linux has been exercised; Windows and macOS have not been verified.
+- Linux, Windows, and macOS are intended targets. All three have been exercised: Linux locally, and Windows and macOS on GitHub-hosted runners in Phase 8.
 
 ## Installation
 
@@ -22,15 +24,15 @@ A package distribution is not published yet. From a local checkout:
 python -m pip install .
 ```
 
-This command was verified on Linux in an isolated virtual environment. The build uses isolation, so it needs access to a package index or a populated build-dependency cache; an offline install fails if the required `setuptools` build dependency is unavailable.
+This command was verified on Linux in an isolated virtual environment and on the Windows and macOS CI runners in Phase 8. The build uses isolation, so it needs access to a package index or a populated build-dependency cache; an offline install fails if the required `setuptools` build dependency is unavailable.
 
-An isolated installation from the checkout was also verified on Linux with `pipx` 1.18.11:
+An isolated installation from the checkout was also verified with `pipx`: 1.18.11 on Linux and 1.18.12 on the Windows and macOS CI runners.
 
 ```bash
 pipx install .
 ```
 
-Both commands install a `jxcel` command that points at `jxcel.cli:main`. PATH availability was verified for the isolated virtual environment on Linux; `pipx` was exercised only on Linux, and pipx PATH setup was not separately validated.
+Both commands install a `jxcel` command that points at `jxcel.cli:main`. Command availability, the isolated `pipx` command path, and execution from outside the checkout were verified on Linux, Windows, and macOS.
 
 ## Usage
 
@@ -53,7 +55,15 @@ jxcel data.json --overwrite
 
 Without `--overwrite`, an existing destination is an error. With it, jxcel builds and validates a temporary workbook first, then replaces the destination through the approved publication path. jxcel does not claim crash durability or stronger atomicity than the operating system and filesystem provide.
 
-No-overwrite publication creates the destination with a same-directory hard link, so the temporary and destination files stay on one filesystem. Some filesystems do not support hard links, including FAT32/exFAT and some network or container mounts. On such filesystems, no-overwrite publication fails with exit status 1 and an explicit error. jxcel does not fall back to rename or replace, because that fallback could destroy a destination created concurrently. Overwrite publication uses the operating system's replace operation and depends on that filesystem's support. Hard-link behavior was exercised on Linux `tmpfs`; Windows, macOS, and other filesystem types were not tested.
+No-overwrite publication creates the destination with a same-directory hard link, so the temporary and destination files stay on one filesystem. Some filesystems do not support hard links, including FAT32/exFAT and some network or container mounts. On such filesystems, no-overwrite publication fails with exit status 1 and an explicit error. jxcel does not fall back to rename or replace, because that fallback could destroy a destination created concurrently. Overwrite publication uses the operating system's replace operation and depends on that filesystem's support. Hard-link behavior was exercised on Linux `tmpfs` and on the Windows and macOS runner temporary filesystems; other filesystem types, including FAT32/exFAT and network mounts, were not tested.
+
+## Input validation
+
+jxcel reads the input as UTF-8 and accepts an optional UTF-8 BOM. Empty or whitespace-only files, malformed JSON, invalid UTF-8, and trailing content after the JSON value are rejected with exit status 1 and a path-aware error. Malformed JSON reports the line and column; invalid UTF-8 reports the byte offset.
+
+Object keys must be unique at every level. Duplicate keys are rejected even when one is written with an escape such as `\u0061`, because it decodes to the same key; the same key in separate objects is allowed. `NaN`, `Infinity`, and `-Infinity` are rejected as non-standard JSON constants. JSON real numbers must be finite: tokens that overflow a Python float or underflow a nonzero value to zero are rejected. Integers decode as Python integers, subject to Python's configured integer-string conversion limit.
+
+The loader does not restrict the JSON root category: objects, arrays, strings, numbers, booleans, and `null` are all accepted, subject to the validation above. Dataset discovery then treats a root that is not an object or array as `unsupported_root`. Discovery reports an empty array outside dataset records as `empty_array`, and an empty object outside arrays as `empty_object`; neither is an exportable dataset. `--list` and `--preview` report these findings and exit 0; `--dry-run` and conversion exit 1 when no workbook can be produced.
 
 ## Inspection modes
 
@@ -83,6 +93,8 @@ jxcel data.json --dataset /students
 jxcel data.json --dataset /students --dataset /orders
 ```
 
+Pointer tokens use JSON Pointer escaping: `~` is written as `~0` and `/` as `~1`. For example, a dataset under the key `a/b~c` has the pointer `/a~1b~0c`.
+
 Unsupported structures remain visible even when only some datasets are selected. Scalar values and empty objects outside dataset boundaries are listed with their JSON Pointers, so input content that is not exported is visible.
 
 `--column-map` and `--exclude-map` are repeatable and take a JSON array of exactly two strings: the dataset pointer and the exact planned column name. Use shell quoting appropriate to your platform.
@@ -96,7 +108,7 @@ jxcel data.json \
   --exclude-map '["/orders","internal=status"]'
 ```
 
-PowerShell (syntax example; not yet verified on Windows):
+PowerShell (verified on Windows in Phase 8):
 
 ```powershell
 jxcel data.json `
@@ -108,13 +120,13 @@ Mappings are validated against every discovered dataset, but applied only to sel
 
 ## Nested values and flattening
 
-Nested objects flatten by default. For example, `user.name` becomes a column named `user.name`. An empty nested object contributes no column in this mode and produces an `empty_object_omitted` warning with its path and record index. Use `--no-flatten` for one column per top-level property:
+Nested objects flatten by default. For example, `user.name` becomes a column named `user.name`. An empty nested object outside an array contributes no column in this mode and produces an `empty_object_omitted` warning with its column path and sample record indexes. Use `--no-flatten` for one column per top-level property:
 
 ```bash
 jxcel data.json --no-flatten
 ```
 
-With `--no-flatten`, nested objects and arrays are written as compact JSON text. Flattening and `--no-flatten` use the documented reversible column-name encoding; conflicting flattened names fail rather than overwriting data.
+With `--no-flatten`, nested objects, arrays, and empty objects are written as compact JSON text (`{}` for an empty object, `[]` for an empty array); an empty object no longer produces an `empty_object_omitted` warning. Arrays never expand into rows or worksheets in either mode, and empty objects inside arrays are preserved as JSON text. Flattened column names use a reversible encoding of the original key path; conflicting flattened names fail rather than overwriting data. With `--no-flatten`, top-level keys are used as column names unchanged.
 
 ## Output and exit status
 
@@ -132,23 +144,32 @@ With `--no-flatten`, nested objects and arrays are written as compact JSON text.
 ## Data preservation
 
 - Strings remain strings; numeric-looking and date-like text is not reinterpreted.
-- Integers with absolute value at least `10**15` are written as text with a warning.
-- Floats remain numeric and are never rounded; values with more than 15 significant decimal digits produce a warning.
-- Values outside Excel's supported numeric range, forbidden XML characters, and cells beyond Excel's text limit fail planning rather than being truncated.
+- Direct integer values with absolute value at least `10**15` are written as text with an `integer_precision_as_text` warning; smaller direct integers remain numeric.
+- Direct float values remain numeric and are never rounded; values with more than 15 significant decimal digits produce a `float_precision_limited` warning, and direct finite floats outside Excel's numeric range fail export validation.
+- Values written as JSON text (arrays in either mode, and nested objects under `--no-flatten`) produce a `nested_value_as_json_text` warning; numbers inside that text are not converted or range-checked individually.
+- Export validation enforces Excel's limits: at most 1,048,575 data rows per dataset (the header uses row 1 of Excel's 1,048,576 rows), at most 16,384 columns, and at most 32,767 UTF-16 code units per cell or column header. Cell text and column headers reject control characters below `U+0020` other than tab, line feed, and carriage return, lone surrogates, and `U+FFFE`/`U+FFFF`; control characters inside JSON-serialized nested values are escaped. These failures are reported rather than truncated.
 - Formula-like strings are written as text, never as formulas.
 - Null and missing values become blank cells.
 
 Warnings are aggregated by code, dataset, and effective column, with an occurrence count and at most five sample record indexes.
 
+## Workbook output
+
+Each selected exportable dataset becomes one worksheet, in plan order. Worksheet names are derived from dataset pointers: the root dataset is `root`, and pointer tokens are joined with dots. Names are sanitized for Excel, truncated to 31 UTF-16 code units, and made unique case-insensitively with `_2`, `_3`, and so on. The name `History` is reserved case-insensitively.
+
+The header row is bold, filled, and vertically centered, with the header row frozen and an auto-filter over the data range. Column widths are based on the header and the first 100 data rows, with padding, and are clamped to 10–60 characters.
+
+The workbook is written and validated as a temporary file in the destination directory before publication. On any failure before publication, an existing destination is left unchanged and the temporary file is cleaned up; a cleanup failure is reported. With `--overwrite`, replacing an existing regular file preserves its POSIX permission bits where the platform supports them, and a permission failure aborts before replacement. New files use the platform's normal file-creation permissions.
+
 ## Platform validation
 
-Phase 8 validated Linux only. The validation matrix and results are recorded in [ROADMAP.md](ROADMAP.md#phase-8--cross-platform-validation).
+Phase 8 validation results are recorded in [ROADMAP.md](ROADMAP.md#phase-8--cross-platform-validation). Windows and macOS were validated by the manual GitHub Actions workflow run `41666703215` at commit `f351669e6ed5ef072eb888e9a2f2f85401832210`.
 
 | Platform | Status | Evidence |
 |---|---|---|
 | Linux (Fedora 44, kernel `7.2.13-200.fc44.x86_64`, Python 3.14.8, pip 26.0.1) | **Tested; exercised checks passed** | Isolated `python -m pip install .` and isolated `pipx 1.18.11 install .`; `jxcel` available on PATH; execution outside the checkout; `--version`/`--help`; relative, absolute, and Unicode paths; default and explicit output paths; existing-output and `--overwrite` behavior; missing/invalid output parents; input/output collision; repeated `--dataset`; `--column-map`/`--exclude-map`; preview, dry-run, and preview+dry-run; exit statuses 0, 1, and 2; no-write inspection modes; publication-failure cleanup. |
-| Windows | **NOT TESTED** | No Windows host, WSL, Wine, PowerShell, Windows container, or Windows image was available. Compatibility was inspected read-only only. |
-| macOS | **NOT TESTED** | No macOS host, virtual machine, container, remote target, or CI runner was available. Compatibility was inspected read-only only. |
+| Windows (`windows-2025`, X64, Python 3.14.10, pip 26.2.2, pipx 1.18.12) | **Tested; 25/25 acceptance checks passed** | Isolated virtual environment and `pipx` installs; command available outside the checkout; relative, absolute, and Unicode paths; `--version`/`--help`; existing-output and `--overwrite` behavior; missing/invalid output parents; input/output collision and symlink alias; repeated `--dataset`; `--column-map`/`--exclude-map`; preview, dry-run, and list; exit statuses 0, 1, and 2; no-write inspection modes; hard-link publication; publication race and temporary-file cleanup; Bash, PowerShell, and CMD JSON-pair quoting; native console encoding. 299 unit tests passed with 2 expected POSIX permission-bit skips. |
+| macOS (`macos-15`, ARM64, Python 3.14.10, pip 26.2.2, pipx 1.18.12) | **Tested; 25/25 acceptance checks passed** | Shared cross-platform checks: isolated virtual environment and `pipx` installs; command available outside the checkout; relative, absolute, and Unicode paths; `--version`/`--help`; existing-output and `--overwrite` behavior; missing/invalid output parents; input/output collision and symlink alias; repeated `--dataset`; `--column-map`/`--exclude-map`; preview, dry-run, and list; exit statuses 0, 1, and 2; no-write inspection modes; hard-link publication; publication race and temporary-file cleanup; Bash JSON-pair quoting. macOS also verified preservation of POSIX mode `0o640` on overwrite. The Windows-only PowerShell, CMD, and native-console encoding checks were not run on macOS by design. 299 unit tests passed with no skips. |
 
 Reproducible Linux install and smoke commands, with temporary directories:
 
@@ -160,6 +181,8 @@ cd /tmp
 /tmp/jxcel-venv/bin/jxcel --help
 ```
 
+The Windows and macOS matrix is automated by `.github/workflows/phase8-cross-platform.yml`, which is dispatched manually.
+
 The full test suite is run with the standard library:
 
 ```bash
@@ -170,14 +193,18 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest discover -s tests
 
 - The complete JSON document and the export snapshot are held in memory; jxcel is not a streaming converter.
 - Concurrent mutation of source records while a plan is being built is unsupported. Constructing or forging internal plan objects directly can bypass validation and is outside the supported contract.
-- Windows and macOS command behavior, path handling, shell quoting, console behavior, and publication behavior have not been verified.
-- Hard-link publication depends on filesystem support and was exercised only on Linux `tmpfs`; see the publication note above.
-- Only Python 3.14.8 has been exercised. Python 3.11–3.13 are declared as supported by package metadata but were not tested.
-- See [ROADMAP.md](ROADMAP.md) for deferred features and remaining platform-validation and release work.
+- Windows and macOS behavior was verified on the GitHub-hosted `windows-2025` and `macos-15` runner environments and their temporary filesystems; other environments were not tested.
+- Hard-link publication depends on filesystem support and was exercised on Linux `tmpfs` and the Windows and macOS runner temporary filesystems; other filesystem types were not tested.
+- Only Python 3.14 has been exercised: 3.14.8 on Linux and 3.14.10 on the Windows and macOS CI runners. Python 3.11–3.13 are declared as supported by package metadata but were not tested.
+- See [ROADMAP.md](ROADMAP.md) for deferred features and remaining release work.
+
+## License
+
+jxcel is licensed under the MIT License. See [LICENSE](LICENSE) for the full text.
 
 ## Project guidance
 
 - [AGENTS.md](AGENTS.md) contains repository-wide instructions for coding agents.
 - [ROADMAP.md](ROADMAP.md) is the detailed product and implementation specification.
 
-The existing `export_students.py` is a domain-specific legacy script and is not part of the general-purpose package.
+The `export_students.py` legacy script is a domain-specific exporter that predates `jxcel`. It is not part of the general-purpose package and is not installed by `pip install .` or `pipx install .`.
