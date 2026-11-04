@@ -4,7 +4,7 @@
 
 `jxcel` is being prepared as a cross-platform Python CLI for converting JSON files into Excel `.xlsx` workbooks. Linux, Windows, and macOS are intended targets. Runtime dependencies are the Python standard library and `openpyxl` only.
 
-Phases 2–7 are implemented in `src/jxcel/`, including the integrated `jxcel` command. Phase 6 is complete and approved after its final QA recheck, and Phase 7 is complete. Phase 8 cross-platform validation is **COMPLETE**: Linux passed the exercised checks locally, and GitHub Actions run `41666703215` on commit `f351669e6ed5ef072eb888e9a2f2f85401832210` passed on both Windows and macOS. Do not describe later planned phases as working.
+Phases 2–7 are implemented in `src/jxcel/`, including the integrated `jxcel` command. Phase 6 is complete and approved after its final QA recheck, and Phase 7 is complete. Phase 8 cross-platform validation is **COMPLETE**: GitHub Actions run `41932837972` on commit `72aa74f56b99a96a3f8989ea59e6eb49165d5b8e` passed all 12 Ubuntu, Windows, and macOS × Python 3.11–3.14 jobs. Each job ran 309 unit tests and 25 CLI acceptance checks; Windows skipped three POSIX-only permission tests. The earlier Phase 8 run `41666703215` remains historical evidence for the prior code. Do not describe later planned phases as working.
 
 `ROADMAP.md` is maintained locally and intentionally excluded from Git. It may be available in the owner's workspace but is not a repository or distribution file. Use it when present and relevant; do not assume a fresh checkout contains it. If required product decisions are missing, ask the user for the authoritative specification instead of inventing one. This file defines stable workflow rules. Decision labels mean:
 

@@ -6,13 +6,15 @@
 
 The converter is functional. JSON loading and validation, dataset discovery, schema planning and value preparation, workbook generation with validated publication, and command-line integration are implemented in `src/jxcel/`. The package has not been published.
 
-Historical Phase 8 cross-platform validation passed on commit `f351669e6ed5ef072eb888e9a2f2f85401832210`: GitHub Actions run [41666703215](https://github.com/AbuTaha7000D/jxcel/actions/runs/41666703215) passed on Windows (`windows-2025`, X64) and macOS (`macos-15`, ARM64), with 25 acceptance checks on each. Those results predate the current local audit changes; current cross-platform release verification is pending.
+Current cross-platform release verification passed in GitHub Actions run [41932837972](https://github.com/AbuTaha7000D/jxcel/actions/runs/41932837972) on commit `72aa74f56b99a96a3f8989ea59e6eb49165d5b8e`. All 12 Linux, Windows, and macOS × Python 3.11–3.14 jobs passed. Each ran the full 309-test suite and 25 CLI acceptance checks; Windows skipped three POSIX-only permission tests. The workflow also built and inspected wheel and source distributions, installed them in separate environments, and verified pipx installation.
+
+The earlier Phase 8 run [41666703215](https://github.com/AbuTaha7000D/jxcel/actions/runs/41666703215) validated commit `f351669e6ed5ef072eb888e9a2f2f85401832210` on Windows and macOS with the original 299-test suite.
 
 Release notes for version `0.1.0` are in [RELEASE_NOTES.md](https://github.com/AbuTaha7000D/jxcel/blob/main/RELEASE_NOTES.md).
 
 ## Requirements
 
-- Python 3.11 or newer is declared. Only Python 3.14 has been exercised so far: 3.14.8 on Linux and 3.14.10 on the historical Windows and macOS CI runners.
+- Python 3.11 or newer is declared. Python 3.11, 3.12, 3.13, and 3.14 have all been exercised on Ubuntu 24.04, Windows 2025, and macOS 15 in run 41932837972.
 - Runtime dependencies: the Python standard library and `openpyxl`.
 - Linux, Windows, and macOS are intended targets. All three have been exercised: Linux locally, and Windows and macOS on GitHub-hosted runners in Phase 8.
 
@@ -165,13 +167,13 @@ Choose an output directory whose access controls are appropriate for the workboo
 
 ## Platform validation
 
-Historical Phase 8 results are available in [GitHub Actions run 41666703215](https://github.com/AbuTaha7000D/jxcel/actions/runs/41666703215), validating commit `f351669e6ed5ef072eb888e9a2f2f85401832210`. That evidence predates the current audit changes.
+The current 12-combination matrix passed in [GitHub Actions run 41932837972](https://github.com/AbuTaha7000D/jxcel/actions/runs/41932837972), validating commit `72aa74f56b99a96a3f8989ea59e6eb49165d5b8e`.
 
 | Platform | Status | Evidence |
 |---|---|---|
-| Linux (Fedora 44, kernel `7.2.13-200.fc44.x86_64`, Python 3.14.8, pip 26.0.1) | **Tested; exercised checks passed** | Isolated `python -m pip install .` and isolated `pipx 1.18.11 install .`; `jxcel` available on PATH; execution outside the checkout; `--version`/`--help`; relative, absolute, and Unicode paths; default and explicit output paths; existing-output and `--overwrite` behavior; missing/invalid output parents; input/output collision; repeated `--dataset`; `--column-map`/`--exclude-map`; preview, dry-run, and preview+dry-run; exit statuses 0, 1, and 2; no-write inspection modes; publication-failure cleanup. |
-| Windows (`windows-2025`, X64, Python 3.14.10, pip 26.2.2, pipx 1.18.12) | **Tested; 25/25 acceptance checks passed** | Isolated virtual environment and `pipx` installs; command available outside the checkout; relative, absolute, and Unicode paths; `--version`/`--help`; existing-output and `--overwrite` behavior; missing/invalid output parents; input/output collision and symlink alias; repeated `--dataset`; `--column-map`/`--exclude-map`; preview, dry-run, and list; exit statuses 0, 1, and 2; no-write inspection modes; hard-link publication; publication race and temporary-file cleanup; Bash, PowerShell, and CMD JSON-pair quoting; native console encoding. 299 unit tests passed with 2 expected POSIX permission-bit skips. |
-| macOS (`macos-15`, ARM64, Python 3.14.10, pip 26.2.2, pipx 1.18.12) | **Tested; 25/25 acceptance checks passed** | Shared cross-platform checks: isolated virtual environment and `pipx` installs; command available outside the checkout; relative, absolute, and Unicode paths; `--version`/`--help`; existing-output and `--overwrite` behavior; missing/invalid output parents; input/output collision and symlink alias; repeated `--dataset`; `--column-map`/`--exclude-map`; preview, dry-run, and list; exit statuses 0, 1, and 2; no-write inspection modes; hard-link publication; publication race and temporary-file cleanup; Bash JSON-pair quoting. macOS also verified preservation of POSIX mode `0o640` on overwrite. The Windows-only PowerShell, CMD, and native-console encoding checks were not run on macOS by design. 299 unit tests passed with no skips. |
+| Linux (`ubuntu-24.04`, plus local Fedora 44) | **PASS on Python 3.11–3.14** | All four jobs passed all 309 unit tests and 25 acceptance checks. Each built and inspected wheel/sdist, installed each in isolated environments, ran CLI/pipx smoke checks, and verified publication behavior. |
+| Windows (`windows-2025`, X64) | **PASS on Python 3.11–3.14** | All four jobs passed the 309-test suite (306 passed, three POSIX-only permission-bit tests skipped) and 25 acceptance checks. Windows shell quoting and native console checks passed. |
+| macOS (`macos-15`, ARM64) | **PASS on Python 3.11–3.14** | All four jobs passed all 309 unit tests and 25 acceptance checks. POSIX permission preservation and hard-link publication checks passed. |
 
 Reproducible Linux install and smoke commands, with temporary directories:
 
@@ -183,7 +185,7 @@ cd /tmp
 /tmp/jxcel-venv/bin/jxcel --help
 ```
 
-The Linux, Windows, and macOS Python matrix is automated by `.github/workflows/phase8-cross-platform.yml`, which is dispatched manually.
+The Linux, Windows, and macOS Python matrix is automated by `.github/workflows/phase8-cross-platform.yml`, which is dispatched manually. The current verification run is linked above.
 
 The full test suite uses the standard library. Bash:
 
@@ -218,9 +220,9 @@ The workflow uses [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publis
 - The complete JSON document and the export snapshot are held in memory; jxcel is not a streaming converter.
 - JSON documents nested more than 500 object/array levels are rejected with a path-aware error. This fixed limit avoids interpreter-dependent parser behavior and excessive discovery paths; brackets inside strings do not count.
 - Concurrent mutation of source records while a plan is being built is unsupported. Constructing or forging internal plan objects directly can bypass validation and is outside the supported contract.
-- Windows and macOS behavior for the prior Phase 8 code was verified on GitHub-hosted `windows-2025` and `macos-15` runners; the current audit changes have not yet been rerun there.
+- The matrix covers GitHub-hosted Ubuntu 24.04, Windows 2025, and macOS 15; other OS releases, hardware architectures, and filesystems were not tested.
 - Hard-link publication depends on filesystem support and was exercised on Linux `tmpfs` and the Windows and macOS runner temporary filesystems; other filesystem types were not tested.
-- Only Python 3.14 has been exercised: 3.14.8 on Linux and 3.14.10 on the Windows and macOS CI runners. Python 3.11–3.13 are declared as supported by package metadata but were not tested.
+- The current matrix ran Python 3.11–3.14 on all three named operating systems; future interpreter patch releases and OS runner images may differ.
 - The detailed roadmap is maintained locally and is not included in Git or package distributions.
 
 ## License
