@@ -6,7 +6,7 @@
 
 Phases 2–7 are implemented in `src/jxcel/`, including the integrated `jxcel` command. Phase 6 is complete and approved after its final QA recheck, and Phase 7 is complete. Phase 8 cross-platform validation is **COMPLETE**: Linux passed the exercised checks locally, and GitHub Actions run `41666703215` on commit `f351669e6ed5ef072eb888e9a2f2f85401832210` passed on both Windows and macOS. Do not describe later planned phases as working.
 
-`ROADMAP.md` is the detailed product specification, decision record, and phase-status handoff. This file defines stable workflow rules. Decision labels mean:
+`ROADMAP.md` is maintained locally and intentionally excluded from Git. It may be available in the owner's workspace but is not a repository or distribution file. Use it when present and relevant; do not assume a fresh checkout contains it. If required product decisions are missing, ask the user for the authoritative specification instead of inventing one. This file defines stable workflow rules. Decision labels mean:
 
 - **Confirmed:** product requirement established by the user.
 - **Approved:** decision explicitly approved by the user.
@@ -56,7 +56,7 @@ Use specialists for bounded analysis, design, implementation, testing, or docume
 
 ### QA & Review Agent
 
-When available, an independent QA & Review Agent inspects the actual changed files and implementation against `AGENTS.md`, `ROADMAP.md`, and the approved phase requirements. It reviews relevant tests, runs required checks where possible, and reports concrete findings and evidence; it does not silently fix implementation issues.
+When available, an independent QA & Review Agent inspects the actual changed files and implementation against `AGENTS.md`, the approved requirements, and `ROADMAP.md` when that local-only file is available. It reviews relevant tests, runs required checks where possible, and reports concrete findings and evidence; it does not silently fix implementation issues.
 
 The QA outcome is one of:
 
@@ -96,7 +96,7 @@ Approval for a phase does not authorize unrelated work, later phases, publicatio
 
 ## Handoff between agents, tools, and sessions
 
-Make handoffs understandable without conversational memory. Record changing phase status, completed and remaining work, decisions, blockers, modified files, verification and results, next action, and whether approval is required in the appropriate `ROADMAP.md` sections. Keep this file stable; do not duplicate the roadmap or use `AGENTS.md` as a progress log.
+Make handoffs understandable without conversational memory. When the local-only `ROADMAP.md` is available and updating it is authorized, record changing phase status, decisions, blockers, modified files, verification and results, and next action there. Do not create, track, or publish it. If it is unavailable, include the handoff in the final report; keep this file stable and do not use `AGENTS.md` as a progress log.
 
 For delegated tasks, provide the same relevant context directly to the receiving agent, including project instructions, task scope, dependencies, deliverables, and evidence expected.
 

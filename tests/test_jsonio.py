@@ -55,6 +55,20 @@ class LoadJsonTests(unittest.TestCase):
         self.assertIn("column", message)
         self.assertIsNotNone(caught.exception.__cause__)
 
+    def test_excessive_nesting_fails_with_path_aware_loader_error(self):
+        nesting = 100_000
+        path = self.write_text(
+            "deeply-nested.json",
+            "[" * nesting + "0" + "]" * nesting,
+        )
+
+        with self.assertRaises(JsonLoadError) as caught:
+            load_json(path)
+
+        self.assertIn(str(path), str(caught.exception))
+        self.assertIn("nesting", str(caught.exception).lower())
+        self.assertIsInstance(caught.exception.__cause__, RecursionError)
+
     def test_trailing_content_is_rejected(self):
         path = self.write_text("trailing.json", "{} {}")
 

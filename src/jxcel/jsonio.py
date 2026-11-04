@@ -125,6 +125,10 @@ def load_json(path: str | os.PathLike[str]) -> object:
             f"JSON integer exceeds Python's configured integer-string conversion "
             f"limit in {input_path}: {exc.cause}"
         ) from exc.cause
+    except RecursionError as exc:
+        raise JsonLoadError(
+            f"JSON nesting exceeds the parser limit in {input_path}"
+        ) from exc
     except ValueError as exc:
         raise JsonLoadError(
             f"Could not decode a JSON value in {input_path}: {exc}"

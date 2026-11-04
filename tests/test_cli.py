@@ -760,6 +760,18 @@ class ConversionTests(CliTestCase):
 
 
 class EndToEndTests(CliTestCase):
+    def test_excessive_json_nesting_returns_error_without_traceback(self):
+        nesting = 100_000
+        path = self.write_bytes(b"[" * nesting + b"0" + b"]" * nesting)
+
+        code, stdout, stderr = self.run_cli(path)
+
+        self.assertEqual(code, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn(str(path), stderr)
+        self.assertIn("nesting", stderr.lower())
+        self.assertNotIn("Traceback", stderr)
+
     def test_broken_stderr_during_error_reporting_returns_failure(self):
         path = self.root / "missing.json"
 

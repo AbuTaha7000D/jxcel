@@ -1,7 +1,9 @@
 import errno
+import multiprocessing
 import os
 import stat
 import tempfile
+import threading
 import unittest
 import zipfile
 from dataclasses import replace
@@ -41,6 +43,22 @@ def make_plan(pointer="/data", records=None, **kwargs):
     if records is None:
         records = ({"a": 1},)
     return make_plans([(pointer, records)], **kwargs)[0]
+
+
+def _competing_export_worker(directory, worker, rounds, barrier, results):
+    for index in range(rounds):
+        barrier.wait(timeout=30)
+        output = Path(directory) / f"concurrent-{index}.xlsx"
+        plan = make_plan(records=({"a": f"worker-{worker}-round-{index}"},))
+        try:
+            export_workbook([plan], output)
+        except WorkbookError as exc:
+            result = "exists" if "already exists" in str(exc) else f"error: {exc}"
+        else:
+            result = "published"
+        results.put((index, worker, result))
+        barrier.wait(timeout=30)
+        barrier.wait(timeout=30)
 
 
 def naming_plan(pointer, *, selected=True, exportable=True):
@@ -924,6 +942,42 @@ class PublicationTests(unittest.TestCase):
         finally:
             workbook.close()
 
+    def test_export_serializes_and_validates_same_stream_while_posix_private(self):
+        if os.name != "posix":
+            self.skipTest("POSIX descriptor permissions are not available")
+        output = self.output()
+        observed = {}
+        real_save = workbook_module.Workbook.save
+        real_validate = workbook_module._validate_workbook
+
+        def save(workbook, stream):
+            observed["save_stream"] = stream
+            observed["write_mode"] = stat.S_IMODE(os.fstat(stream.fileno()).st_mode)
+            real_save(workbook, stream)
+
+        def validate(stream, plans, assignments, **kwargs):
+            observed["validation_stream"] = stream
+            observed["validation_mode"] = stat.S_IMODE(os.fstat(stream.fileno()).st_mode)
+            real_validate(stream, plans, assignments, **kwargs)
+
+        with patch.object(workbook_module.Workbook, "save", autospec=True, side_effect=save), patch.object(
+            workbook_module,
+            "_validate_workbook",
+            side_effect=validate,
+        ):
+            export_workbook([self.plan], output)
+
+        self.assertIs(observed["save_stream"], observed["validation_stream"])
+        self.assertEqual(observed["write_mode"], 0o600)
+        self.assertEqual(observed["validation_mode"], 0o600)
+        reference = self.directory / "reference-mode"
+        descriptor = os.open(reference, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+        os.close(descriptor)
+        self.assertEqual(
+            stat.S_IMODE(os.stat(output).st_mode),
+            stat.S_IMODE(os.stat(reference).st_mode),
+        )
+
     def test_existing_destination_without_overwrite_is_preserved(self):
         output = self.output()
         output.write_bytes(b"existing destination")
@@ -951,6 +1005,114 @@ class PublicationTests(unittest.TestCase):
 
         self.assertEqual(output.read_bytes(), b"competing content")
         self.assertEqual(self.temp_files(), [])
+
+    def test_concurrent_process_exports_publish_one_winner_per_destination(self):
+        rounds = 10
+        context = multiprocessing.get_context("spawn")
+        barrier = context.Barrier(3)
+        results = context.Queue()
+        workers = [
+            context.Process(
+                target=_competing_export_worker,
+                args=(str(self.directory), worker, rounds, barrier, results),
+            )
+            for worker in (0, 1)
+        ]
+        for process in workers:
+            process.start()
+
+        try:
+            for index in range(rounds):
+                barrier.wait(timeout=30)
+                barrier.wait(timeout=30)
+                outcomes = [results.get(timeout=20) for _ in range(2)]
+                self.assertEqual({item[0] for item in outcomes}, {index})
+                self.assertEqual(
+                    sorted(item[2] for item in outcomes),
+                    ["exists", "published"],
+                    outcomes,
+                )
+                workbook = load_workbook(
+                    self.output(f"concurrent-{index}.xlsx"),
+                    data_only=False,
+                )
+                try:
+                    winner = workbook["data"]["A2"].value
+                finally:
+                    workbook.close()
+                self.assertIn(
+                    winner,
+                    {f"worker-{worker}-round-{index}" for worker in (0, 1)},
+                )
+                barrier.wait(timeout=30)
+        finally:
+            for process in workers:
+                process.join(timeout=10)
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=5)
+
+        for process in workers:
+            self.assertEqual(process.exitcode, 0)
+
+    def test_concurrent_readers_never_observe_partial_overwrite(self):
+        output = self.output()
+        export_workbook(
+            [make_plan(records=({"a": "generation-0"},))],
+            output,
+        )
+        start = threading.Barrier(2)
+        ready = threading.Event()
+        finished = threading.Event()
+        failures = []
+        reads = []
+
+        def read_until_done():
+            ready.set()
+            start.wait(timeout=20)
+            while not finished.is_set():
+                try:
+                    workbook = load_workbook(output, data_only=False)
+                    try:
+                        value = workbook["data"]["A2"].value
+                        if not isinstance(value, str) or not value.startswith("generation-"):
+                            failures.append(f"unexpected cell value: {value!r}")
+                        else:
+                            reads.append(value)
+                    finally:
+                        workbook.close()
+                except Exception as exc:
+                    failures.append(f"reader observed invalid workbook: {exc!r}")
+
+        reader = threading.Thread(target=read_until_done, daemon=True)
+        reader.start()
+        successful_replacements = 0
+        try:
+            self.assertTrue(ready.wait(timeout=10))
+            start.wait(timeout=20)
+            for generation in range(1, 21):
+                plan = make_plan(records=({"a": f"generation-{generation}"},))
+                try:
+                    export_workbook([plan], output, overwrite=True)
+                except WorkbookError:
+                    # Some platforms may refuse replacing a file opened by a
+                    # concurrent reader. The destination must still be readable.
+                    workbook = load_workbook(output, data_only=False)
+                    workbook.close()
+                else:
+                    successful_replacements += 1
+        finally:
+            finished.set()
+            reader.join(timeout=20)
+        self.assertFalse(reader.is_alive())
+        self.assertGreater(successful_replacements, 0)
+        self.assertTrue(reads, "the reader did not observe a published workbook")
+        self.assertEqual(failures, [])
+        final_workbook = load_workbook(output, data_only=False)
+        try:
+            self.assertTrue(final_workbook["data"]["A2"].value.startswith("generation-"))
+        finally:
+            final_workbook.close()
 
     def test_link_failure_has_no_unsafe_fallback(self):
         output = self.output()
@@ -994,14 +1156,22 @@ class PublicationTests(unittest.TestCase):
     def test_permission_preservation_failure_aborts_before_replace(self):
         output = self.output()
         output.write_bytes(b"old content")
+        permission_function = "os.fchmod" if os.name == "posix" else "os.chmod"
+        real_fchmod = os.fchmod if os.name == "posix" else os.chmod
+
+        def fail_when_restoring_mode(*args):
+            if os.name == "posix" and args[1] == 0o600:
+                return real_fchmod(*args)
+            raise OSError(errno.EPERM, "denied")
+
         with patch(
-            "jxcel.workbook.os.chmod",
-            side_effect=OSError(errno.EPERM, "denied"),
+            f"jxcel.workbook.{permission_function}",
+            side_effect=fail_when_restoring_mode,
         ), patch(
             "jxcel.workbook.os.replace",
             side_effect=AssertionError("replace attempted"),
         ):
-            with self.assertRaisesRegex(WorkbookError, "preserve permissions"):
+            with self.assertRaisesRegex(WorkbookError, "permissions"):
                 export_workbook([self.plan], output, overwrite=True)
         self.assertEqual(output.read_bytes(), b"old content")
         self.assertEqual(self.temp_files(), [])
@@ -1048,23 +1218,12 @@ class PublicationTests(unittest.TestCase):
         self.assertFalse(output.exists())
         self.assertEqual(self.temp_files(), [])
 
-    def test_interrupt_while_closing_new_temp_file_cleans_temp(self):
+    def test_interrupt_while_opening_new_temp_stream_cleans_temp(self):
         output = self.output()
-        real_close = os.close
-        close_calls = 0
-
-        def interrupt_once(descriptor):
-            nonlocal close_calls
-            close_calls += 1
-            if close_calls == 1:
-                raise KeyboardInterrupt
-            return real_close(descriptor)
-
-        with patch("jxcel.workbook.os.close", side_effect=interrupt_once):
+        with patch("jxcel.workbook.os.fdopen", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 export_workbook([self.plan], output)
 
-        self.assertEqual(close_calls, 2)
         self.assertFalse(output.exists())
         self.assertEqual(self.temp_files(), [])
 
@@ -1113,8 +1272,10 @@ class PublicationTests(unittest.TestCase):
         output = self.output()
         output.write_bytes(b"old content")
 
-        def write_corrupt_workbook(_workbook, path):
-            Path(path).write_bytes(b"not a valid xlsx archive")
+        def write_corrupt_workbook(_workbook, stream):
+            stream.seek(0)
+            stream.write(b"not a valid xlsx archive")
+            stream.truncate()
 
         with patch.object(
             workbook_module.Workbook,
@@ -1136,9 +1297,9 @@ class PublicationTests(unittest.TestCase):
         real_validate = workbook_module._validate_workbook
         observed = []
 
-        def observe(path, plans, assignments, **kwargs):
-            observed.append(path.parent)
-            real_validate(path, plans, assignments, **kwargs)
+        def observe(target, plans, assignments, **kwargs):
+            observed.append(kwargs["reported_path"].parent)
+            real_validate(target, plans, assignments, **kwargs)
 
         with patch.object(
             workbook_module,

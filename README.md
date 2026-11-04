@@ -6,13 +6,13 @@
 
 The converter is functional. JSON loading and validation, dataset discovery, schema planning and value preparation, workbook generation with validated publication, and command-line integration are implemented in `src/jxcel/`. The package has not been published.
 
-Phase 8 cross-platform validation is **complete**. The manual GitHub Actions workflow run `41666703215`, validating commit `f351669e6ed5ef072eb888e9a2f2f85401832210`, passed on both Windows (`windows-2025`, X64) and macOS (`macos-15`, ARM64). Both platforms passed all 25 acceptance checks and ran the 299-test suite; Windows skipped 2 POSIX-only permission-bit tests, and macOS had no skips. See [ROADMAP.md](ROADMAP.md#phase-8--cross-platform-validation) for the evidence.
+Historical Phase 8 cross-platform validation passed on commit `f351669e6ed5ef072eb888e9a2f2f85401832210`: GitHub Actions run [41666703215](https://github.com/AbuTaha7000D/jxcel/actions/runs/41666703215) passed on Windows (`windows-2025`, X64) and macOS (`macos-15`, ARM64), with 25 acceptance checks on each. Those results predate the current local audit changes; current cross-platform release verification is pending.
 
-Release notes for version `0.1.0` are in [RELEASE_NOTES.md](RELEASE_NOTES.md).
+Release notes for version `0.1.0` are in [RELEASE_NOTES.md](https://github.com/AbuTaha7000D/jxcel/blob/main/RELEASE_NOTES.md).
 
 ## Requirements
 
-- Python 3.11 or newer. Only Python 3.14 has been exercised so far: 3.14.8 on Linux and 3.14.10 on the Windows and macOS CI runners.
+- Python 3.11 or newer is declared. Only Python 3.14 has been exercised so far: 3.14.8 on Linux and 3.14.10 on the historical Windows and macOS CI runners.
 - Runtime dependencies: the Python standard library and `openpyxl`.
 - Linux, Windows, and macOS are intended targets. All three have been exercised: Linux locally, and Windows and macOS on GitHub-hosted runners in Phase 8.
 
@@ -159,11 +159,13 @@ Each selected exportable dataset becomes one worksheet, in plan order. Worksheet
 
 The header row is bold, filled, and vertically centered, with the header row frozen and an auto-filter over the data range. Column widths are based on the header and the first 100 data rows, with padding, and are clamped to 10–60 characters.
 
-The workbook is written and validated as a temporary file in the destination directory before publication. On any failure before publication, an existing destination is left unchanged and the temporary file is cleaned up; a cleanup failure is reported. With `--overwrite`, replacing an existing regular file preserves its POSIX permission bits where the platform supports them, and a permission failure aborts before replacement. New files use the platform's normal file-creation permissions.
+The workbook is written and validated through one open temporary-file stream before publication. On POSIX, the temporary file is mode `0600` while it is written and validated; its intended final mode is applied only after validation. With `--overwrite`, an existing regular file's POSIX permission bits are preserved; new files use the platform's normal file-creation mode. A permission failure before publication leaves the existing destination unchanged. Windows temporary files inherit the output directory's ACL; Windows `chmod` does not preserve general ACLs.
+
+Choose an output directory whose access controls are appropriate for the workbook data. jxcel protects against accidental concurrent publishers: no-overwrite publication uses a same-directory hard link, and overwrite uses the operating system's replace operation. It does not defend against a malicious process running as the same user or another user/process with permission to change entries in the output directory. The temporary pathname is still used for publication and cleanup, so a hostile writable output directory is outside the security guarantee.
 
 ## Platform validation
 
-Phase 8 validation results are recorded in [ROADMAP.md](ROADMAP.md#phase-8--cross-platform-validation). Windows and macOS were validated by the manual GitHub Actions workflow run `41666703215` at commit `f351669e6ed5ef072eb888e9a2f2f85401832210`.
+Historical Phase 8 results are available in [GitHub Actions run 41666703215](https://github.com/AbuTaha7000D/jxcel/actions/runs/41666703215), validating commit `f351669e6ed5ef072eb888e9a2f2f85401832210`. That evidence predates the current audit changes.
 
 | Platform | Status | Evidence |
 |---|---|---|
@@ -181,22 +183,44 @@ cd /tmp
 /tmp/jxcel-venv/bin/jxcel --help
 ```
 
-The Windows and macOS matrix is automated by `.github/workflows/phase8-cross-platform.yml`, which is dispatched manually.
+The Linux, Windows, and macOS Python matrix is automated by `.github/workflows/phase8-cross-platform.yml`, which is dispatched manually.
 
-The full test suite is run with the standard library:
+The full test suite uses the standard library. Bash:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest discover -s tests
 ```
 
+PowerShell:
+
+```powershell
+$env:PYTHONDONTWRITEBYTECODE = "1"
+$env:PYTHONPATH = "src"
+python -m unittest discover -s tests
+```
+
+Windows CMD:
+
+```bat
+set PYTHONDONTWRITEBYTECODE=1
+set PYTHONPATH=src
+python -m unittest discover -s tests
+```
+
+## PyPI release process
+
+The manually dispatched [PyPI workflow](.github/workflows/publish.yml) builds a wheel and source distribution. Its `publish` input defaults to `false`; publishing runs only when it is explicitly set to `true` on `main`. Do not enable that input without separate authorization to publish this release.
+
+The workflow uses [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/) and does not store a PyPI token. Before first publication, configure the PyPI trusted publisher for owner `AbuTaha7000D`, repository `jxcel`, workflow `.github/workflows/publish.yml`, and GitHub environment `pypi`. Configure that GitHub environment with the required release reviewers. The project currently has no PyPI registration; PyPI's [trusted publisher project creation](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/) flow can register it during an explicitly authorized first publish.
+
 ## Limitations
 
 - The complete JSON document and the export snapshot are held in memory; jxcel is not a streaming converter.
 - Concurrent mutation of source records while a plan is being built is unsupported. Constructing or forging internal plan objects directly can bypass validation and is outside the supported contract.
-- Windows and macOS behavior was verified on the GitHub-hosted `windows-2025` and `macos-15` runner environments and their temporary filesystems; other environments were not tested.
+- Windows and macOS behavior for the prior Phase 8 code was verified on GitHub-hosted `windows-2025` and `macos-15` runners; the current audit changes have not yet been rerun there.
 - Hard-link publication depends on filesystem support and was exercised on Linux `tmpfs` and the Windows and macOS runner temporary filesystems; other filesystem types were not tested.
 - Only Python 3.14 has been exercised: 3.14.8 on Linux and 3.14.10 on the Windows and macOS CI runners. Python 3.11–3.13 are declared as supported by package metadata but were not tested.
-- See [ROADMAP.md](ROADMAP.md) for deferred features and remaining release work.
+- The detailed roadmap is maintained locally and is not included in Git or package distributions.
 
 ## License
 
@@ -205,6 +229,6 @@ jxcel is licensed under the MIT License. See [LICENSE](LICENSE) for the full tex
 ## Project guidance
 
 - [AGENTS.md](AGENTS.md) contains repository-wide instructions for coding agents.
-- [ROADMAP.md](ROADMAP.md) is the detailed product and implementation specification.
+- The detailed product roadmap is maintained locally and may not be present in a checkout.
 
-The `export_students.py` legacy script is a domain-specific exporter that predates `jxcel`. It is not part of the general-purpose package and is not installed by `pip install .` or `pipx install .`.
+The former `export_students.py` legacy exporter was removed during project cleanup. It is not part of jxcel or its distributions.

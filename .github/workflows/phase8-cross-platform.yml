@@ -1,4 +1,4 @@
-name: Phase 8 Cross-Platform Validation
+name: Cross-Platform Release Verification
 
 on:
   workflow_dispatch:
@@ -8,15 +8,21 @@ permissions:
 
 jobs:
   phase8:
-    name: Phase 8 (${{ matrix.os }})
+    name: Validation (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os:
+          - ubuntu-24.04
           - windows-2025
           - macos-15
+        python-version:
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
     defaults:
       run:
         shell: bash
@@ -29,20 +35,22 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.14
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: ${{ matrix.python-version }}
 
       - name: Record environment
         env:
           EVIDENCE: ${{ runner.temp }}/jxcel-phase8-evidence
           VENV: ${{ runner.temp }}/jxcel-phase8-venv
+          SDIST_VENV: ${{ runner.temp }}/jxcel-sdist-venv
         run: |
           set -euo pipefail
           {
             echo "EVIDENCE=$EVIDENCE"
             echo "VENV=$VENV"
+            echo "SDIST_VENV=$SDIST_VENV"
           } >> "$GITHUB_ENV"
           python - <<'PY'
           import json
@@ -91,6 +99,96 @@ jobs:
           print(text)
           PY
 
+      - name: Build and inspect wheel and source distribution
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            EVIDENCE_BASH="$(cygpath -u "$EVIDENCE")"
+          else
+            EVIDENCE_BASH="$EVIDENCE"
+          fi
+          DIST_BASH="$EVIDENCE_BASH/dist"
+          mkdir -p "$DIST_BASH"
+          python -m pip install build 2>&1 | tee "$EVIDENCE_BASH/build-tool-install.log"
+          python -m build --outdir "$DIST_BASH" 2>&1 | tee "$EVIDENCE_BASH/build.log"
+          python - "$EVIDENCE" <<'PY' 2>&1 | tee "$EVIDENCE_BASH/artifact-inspection.log"
+          import os
+          from email.parser import BytesParser
+          import re
+          import sys
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          windows_user_path = re.compile(rb"(?i)[A-Z]:[\\/]+Users[\\/]+[^\\/]+[\\/]")
+
+          def assert_no_user_home(content, name):
+              assert b"/home/" not in content, name
+              assert b"/Users/" not in content, name
+              assert not windows_user_path.search(content), name
+
+          evidence = Path(sys.argv[1])
+          dist = evidence / "dist"
+          wheels = list(dist.glob("*.whl"))
+          sdists = list(dist.glob("*.tar.gz"))
+          assert len(wheels) == 1, wheels
+          assert len(sdists) == 1, sdists
+          with zipfile.ZipFile(wheels[0]) as wheel:
+              wheel_names = wheel.namelist()
+              metadata_name = next(name for name in wheel_names if name.endswith(".dist-info/METADATA"))
+              metadata = BytesParser().parsebytes(wheel.read(metadata_name))
+              assert metadata["Name"] == "jxcel", metadata
+              assert metadata["Version"] == "0.1.0", metadata
+              assert metadata["Requires-Python"] == ">=3.11", metadata
+              assert any(
+                  requirement.startswith("openpyxl")
+                  and ">=3.1.5" in requirement
+                  and "<4" in requirement
+                  for requirement in metadata.get_all("Requires-Dist", [])
+              ), metadata.get_all("Requires-Dist", [])
+              assert any(name.endswith(".dist-info/licenses/LICENSE") for name in wheel_names)
+              entry_points = next(name for name in wheel_names if name.endswith(".dist-info/entry_points.txt"))
+              assert "jxcel = jxcel.cli:main" in wheel.read(entry_points).decode("utf-8")
+              assert not any("security-poc" in name or "/tests/" in name for name in wheel_names)
+              for name in wheel_names:
+                  if name.endswith((".py", ".txt", ".md", "METADATA")):
+                      assert_no_user_home(wheel.read(name), name)
+          with tarfile.open(sdists[0], "r:gz") as sdist:
+              sdist_names = sdist.getnames()
+              basenames = {Path(name).name for name in sdist_names}
+              assert {"README.md", "LICENSE", "RELEASE_NOTES.md"} <= basenames
+              assert not any("security-poc" in name or "/tests/" in name for name in sdist_names)
+              assert not any(name.startswith("/") or "\\" in name for name in sdist_names)
+              for member in sdist.getmembers():
+                  if member.isfile() and member.name.endswith((".py", ".txt", ".md", ".toml")):
+                      content = sdist.extractfile(member).read()
+                      assert_no_user_home(content, member.name)
+          environment = os.environ.copy()
+          if os.name == "nt":
+              import subprocess
+              wheel_path = subprocess.check_output(["cygpath", "-w", str(wheels[0])], text=True).strip()
+              sdist_path = subprocess.check_output(["cygpath", "-w", str(sdists[0])], text=True).strip()
+          else:
+              wheel_path = str(wheels[0])
+              sdist_path = str(sdists[0])
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write(f"WHEEL={wheel_path}\n")
+              handle.write(f"SDIST={sdist_path}\n")
+          print(f"Wheel: {wheels[0].name}")
+          print(f"Source distribution: {sdists[0].name}")
+          print("Artifact contents checked; development PoC is excluded.")
+          PY
+          WHEEL_BASH="$(find "$DIST_BASH" -maxdepth 1 -name '*.whl' -print -quit)"
+          SDIST_BASH="$(find "$DIST_BASH" -maxdepth 1 -name '*.tar.gz' -print -quit)"
+          test -n "$WHEEL_BASH"
+          test -n "$SDIST_BASH"
+          {
+            echo "EVIDENCE_BASH=$EVIDENCE_BASH"
+            echo "DIST_BASH=$DIST_BASH"
+            echo "WHEEL_BASH=$WHEEL_BASH"
+            echo "SDIST_BASH=$SDIST_BASH"
+          } >> "$GITHUB_ENV"
+
       - name: Create isolated virtual environment and install project
         run: |
           set -euo pipefail
@@ -114,7 +212,7 @@ jobs:
             VENV_PY_BASH="$VENV_PY"
           fi
           "$VENV_PY_BASH" -m pip install --upgrade pip 2>&1 | tee "$EVIDENCE_BASH/pip-upgrade.log"
-          "$VENV_PY_BASH" -m pip install . 2>&1 | tee "$EVIDENCE_BASH/install.log"
+          "$VENV_PY_BASH" -m pip install "$WHEEL_BASH" 2>&1 | tee "$EVIDENCE_BASH/wheel-install.log"
           "$VENV_PY_BASH" -m pip check 2>&1 | tee "$EVIDENCE_BASH/pip-check.log"
           {
             echo "EVIDENCE_BASH=$EVIDENCE_BASH"
@@ -123,6 +221,40 @@ jobs:
             echo "VENV_BIN_BASH=$VENV_BIN_BASH"
             echo "VENV_PY_BASH=$VENV_PY_BASH"
           } >> "$GITHUB_ENV"
+
+      - name: Install source distribution and smoke-test conversion
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            SDIST_VENV_BASH="$(cygpath -u "$SDIST_VENV")"
+            SDIST_VENV_BIN_BASH="$SDIST_VENV_BASH/Scripts"
+            SDIST_VENV_PY_BASH="$SDIST_VENV_BIN_BASH/python.exe"
+          else
+            SDIST_VENV_BASH="$SDIST_VENV"
+            SDIST_VENV_BIN_BASH="$SDIST_VENV_BASH/bin"
+            SDIST_VENV_PY_BASH="$SDIST_VENV_BIN_BASH/python"
+          fi
+          python -m venv "$SDIST_VENV_BASH"
+          "$SDIST_VENV_PY_BASH" -m pip install --upgrade pip 2>&1 | tee "$EVIDENCE_BASH/sdist-pip-upgrade.log"
+          "$SDIST_VENV_PY_BASH" -m pip install "$SDIST_BASH" 2>&1 | tee "$EVIDENCE_BASH/sdist-install.log"
+          "$SDIST_VENV_PY_BASH" -m pip check 2>&1 | tee "$EVIDENCE_BASH/sdist-pip-check.log"
+          export PATH="$SDIST_VENV_BIN_BASH:$PATH"
+          jxcel --version | tee "$EVIDENCE_BASH/sdist-version.txt"
+          SMOKE="$EVIDENCE_BASH/sdist-smoke"
+          mkdir -p "$SMOKE"
+          printf '%s\n' '{"rows":[{"id":7,"label":"sdist smoke"}]}' > "$SMOKE/input.json"
+          jxcel "$SMOKE/input.json" -o "$SMOKE/output.xlsx" 2>&1 | tee "$EVIDENCE_BASH/sdist-conversion.log"
+          "$SDIST_VENV_PY_BASH" - "$SMOKE/output.xlsx" <<'PY'
+          import sys
+          from openpyxl import load_workbook
+
+          workbook = load_workbook(sys.argv[1], read_only=True, data_only=True)
+          try:
+              assert workbook["rows"]["A2"].value == 7
+              assert workbook["rows"]["B2"].value == "sdist smoke"
+          finally:
+              workbook.close()
+          PY
 
       - name: Verify installed command, PATH, version, and help
         run: |
@@ -168,7 +300,7 @@ jobs:
           "$PIPX_PY_BASH" -m pip install pipx 2>&1 | tee "$EVIDENCE_BASH/pipx-tool-install.log"
           "$PIPX_PY_BASH" -m pipx --version | tee "$EVIDENCE_BASH/pipx-version.txt"
           "$PIPX_PY_BASH" -m pipx environment | tee "$EVIDENCE_BASH/pipx-environment.txt"
-          "$PIPX_PY_BASH" -m pipx install . 2>&1 | tee "$EVIDENCE_BASH/pipx-install.log"
+          "$PIPX_PY_BASH" -m pipx install "$WHEEL_BASH" 2>&1 | tee "$EVIDENCE_BASH/pipx-install.log"
           "$PIPX_PY_BASH" -m pipx list | tee "$EVIDENCE_BASH/pipx-list.txt"
           "$PIPX_PY_BASH" -m pipx runpip jxcel check 2>&1 | tee "$EVIDENCE_BASH/pipx-runpip-check.txt"
           test -f "$JXCEL_BIN"
@@ -1061,7 +1193,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: phase8-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-check-${{ matrix.os }}-py${{ matrix.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/jxcel-phase8-evidence
           if-no-files-found: warn
           retention-days: 14

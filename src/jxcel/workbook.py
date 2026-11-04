@@ -8,7 +8,7 @@ import secrets
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import BinaryIO, Sequence
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -308,8 +308,8 @@ def _selected_plans(
     return selected
 
 
-def _create_temp_file(output_path: Path) -> Path:
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+def _create_temp_file(output_path: Path) -> tuple[Path, BinaryIO, int]:
+    flags = os.O_CREAT | os.O_EXCL | os.O_RDWR
     parent = output_path.parent
     for _ in range(_TEMP_FILE_ATTEMPTS):
         candidate = parent / f".jxcel-{secrets.token_hex(12)}.tmp.xlsx"
@@ -322,15 +322,21 @@ def _create_temp_file(output_path: Path) -> Path:
                 f"Could not create a temporary workbook in {parent}: {exc}",
                 output_path=output_path,
             ) from exc
+        stream: BinaryIO | None = None
         try:
-            os.close(descriptor)
+            creation_mode = stat.S_IMODE(os.fstat(descriptor).st_mode)
+            if os.name == "posix":
+                # Keep generated workbook contents private while the named
+                # temporary file is being written and validated. Restore the
+                # intended destination mode only after validation.
+                os.fchmod(descriptor, 0o600)
+            stream = os.fdopen(descriptor, "w+b")
         except BaseException as exc:
-            # An interrupt can arrive after os.open() succeeds but before
-            # this helper returns the path to export_workbook(). Retry the
-            # close best-effort, then remove the path here because the
-            # caller has not yet received it and cannot clean it up.
             try:
-                os.close(descriptor)
+                if stream is not None:
+                    stream.close()
+                else:
+                    os.close(descriptor)
             except BaseException:
                 pass
             try:
@@ -339,12 +345,12 @@ def _create_temp_file(output_path: Path) -> Path:
                 pass
             if isinstance(exc, OSError):
                 raise WorkbookError(
-                    f"Could not close the temporary workbook in {parent}: "
+                    f"Could not prepare the temporary workbook in {parent}: "
                     f"{exc}",
                     output_path=output_path,
                 ) from exc
             raise
-        return candidate
+        return candidate, stream, creation_mode
     raise WorkbookError(
         f"Could not create a unique temporary workbook in {parent}",
         output_path=output_path,
@@ -368,11 +374,13 @@ def _auto_filter_reference(plan: DatasetPlan) -> str:
 def _write_workbook(
     plans: Sequence[DatasetPlan],
     assignments: Sequence[SheetAssignment],
-    path: Path,
+    target: Path | BinaryIO,
     *,
     reported_path: Path | None = None,
 ) -> None:
-    display_path = path if reported_path is None else reported_path
+    display_path = (
+        target if isinstance(target, Path) else Path("<temporary workbook>")
+    ) if reported_path is None else reported_path
     assignment_by_pointer = {
         assignment.pointer: assignment
         for assignment in assignments
@@ -430,7 +438,7 @@ def _write_workbook(
                     max(width + 2, MIN_COLUMN_WIDTH),
                     MAX_COLUMN_WIDTH,
                 )
-        workbook.save(path)
+        workbook.save(target)
     except WorkbookError:
         raise
     except Exception as exc:
@@ -593,15 +601,19 @@ def _validate_prepared_cell(
 
 
 def _validate_workbook(
-    path: Path,
+    target: Path | BinaryIO,
     plans: Sequence[DatasetPlan],
     assignments: Sequence[SheetAssignment],
     *,
     reported_path: Path | None = None,
 ) -> None:
-    display_path = path if reported_path is None else reported_path
+    display_path = (
+        target if isinstance(target, Path) else Path("<temporary workbook>")
+    ) if reported_path is None else reported_path
     try:
-        workbook = load_workbook(path, data_only=False)
+        if hasattr(target, "seek"):
+            target.seek(0)
+        workbook = load_workbook(target, data_only=False)
     except Exception as exc:
         raise WorkbookError(
             f"Could not reopen generated workbook {display_path}: {exc}",
@@ -728,20 +740,42 @@ def _apply_output_permissions(
     temp_path: Path,
     output_path: Path,
     overwrite: bool,
+    creation_mode: int,
+    temp_file: BinaryIO | None,
 ) -> None:
-    if not overwrite:
+    mode = creation_mode
+    if overwrite:
+        try:
+            existing = os.lstat(output_path)
+        except FileNotFoundError:
+            existing = None
+        except OSError as exc:
+            raise WorkbookError(
+                f"Could not inspect existing output permissions for "
+                f"{output_path}: {exc}",
+                output_path=output_path,
+            ) from exc
+        if existing is not None and stat.S_ISREG(existing.st_mode):
+            mode = stat.S_IMODE(existing.st_mode) & 0o777
+        elif os.name != "posix":
+            return
+    if os.name == "posix":
+        if temp_file is None:
+            raise WorkbookError(
+                "Temporary workbook handle is unavailable for permission "
+                f"preparation at {output_path}",
+                output_path=output_path,
+            )
+        try:
+            os.fchmod(temp_file.fileno(), mode)
+        except OSError as exc:
+            raise WorkbookError(
+                f"Could not prepare permissions for output {output_path}: "
+                f"{exc}. The existing output was not replaced.",
+                output_path=output_path,
+            ) from exc
         return
-    try:
-        existing = os.lstat(output_path)
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        raise WorkbookError(
-            f"Could not inspect existing output permissions for "
-            f"{output_path}: {exc}",
-            output_path=output_path,
-        ) from exc
-    if not stat.S_ISREG(existing.st_mode):
+    if not overwrite or existing is None or not stat.S_ISREG(existing.st_mode):
         return
     try:
         os.chmod(temp_path, stat.S_IMODE(existing.st_mode) & 0o777)
@@ -814,21 +848,36 @@ def export_workbook(
     )
 
     temp_path: Path | None = None
+    temp_file: BinaryIO | None = None
     try:
-        temp_path = _create_temp_file(path)
+        temp_path, temp_file, creation_mode = _create_temp_file(path)
         _write_workbook(
             selected,
             assignments,
-            temp_path,
+            temp_file,
             reported_path=path,
         )
+        temp_file.flush()
         _validate_workbook(
-            temp_path,
+            temp_file,
             selected,
             assignments,
             reported_path=path,
         )
-        _apply_output_permissions(temp_path, path, overwrite)
+        temp_file.flush()
+        if os.name != "posix":
+            temp_file.close()
+            temp_file = None
+        _apply_output_permissions(
+            temp_path,
+            path,
+            overwrite,
+            creation_mode,
+            temp_file,
+        )
+        if temp_file is not None:
+            temp_file.close()
+            temp_file = None
 
         if overwrite:
             _publish_with_overwrite(temp_path, path)
@@ -854,6 +903,11 @@ def export_workbook(
             cleanup_warning=cleanup_warning,
         )
     except BaseException as exc:
+        if temp_file is not None:
+            try:
+                temp_file.close()
+            except BaseException:
+                pass
         cleanup_error = None
         if temp_path is not None:
             cleanup_error = _cleanup_temp_file(temp_path)

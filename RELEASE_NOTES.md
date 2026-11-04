@@ -60,4 +60,4 @@ jxcel is licensed under the MIT License. See [LICENSE](LICENSE).
 
 ## Legacy script
 
-`export_students.py` is a domain-specific legacy script that predates `jxcel`. It was not part of the packaged `jxcel` CLI and was not installed by `pip install .` or `pipx install .`.
+The former `export_students.py` legacy exporter was removed during project cleanup. It is not part of jxcel or its distributions.

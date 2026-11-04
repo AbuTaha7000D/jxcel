@@ -1,0 +1,5 @@
+include RELEASE_NOTES.md
+prune tests
+prune security-poc
+prune .github
+exclude AGENTS.md
