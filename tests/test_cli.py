@@ -194,7 +194,7 @@ class ArgumentParsingTests(CliTestCase):
 
         code, stdout, _ = self.run_argument_error("--version")
         self.assertEqual(code, 0)
-        self.assertIn("jxcel 0.1.0", stdout)
+        self.assertIn("jxcel 0.1.1", stdout)
 
         code, _, stderr = self.run_argument_error("--unknown-option")
         self.assertEqual(code, 2)

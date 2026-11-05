@@ -1,239 +1,98 @@
 # jxcel
 
-`jxcel` is a cross-platform command-line application for converting JSON files into formatted Excel `.xlsx` workbooks. It discovers tabular object arrays in general JSON documents; it has no fixed columns or domain-specific assumptions.
+`jxcel` converts JSON files containing tabular records into formatted Excel `.xlsx` workbooks. It finds datasets in general JSON documents, so you do not need to define a schema or write an exporter.
 
-## Development status
+## Requirements and installation
 
-The converter is functional. JSON loading and validation, dataset discovery, schema planning and value preparation, workbook generation with validated publication, and command-line integration are implemented in `src/jxcel/`. The package has not been published.
-
-Current cross-platform release verification passed in GitHub Actions run [41933979297](https://github.com/AbuTaha7000D/jxcel/actions/runs/41933979297) on commit `6d2e5e3f3f0b9cb4a0b7985847a496be744cc1e7`. All 12 Linux, Windows, and macOS × Python 3.11–3.14 jobs passed. Each ran the full 309-test suite and 25 CLI acceptance checks; Windows skipped three POSIX-only permission tests. The workflow also built and inspected wheel and source distributions, installed them in separate environments, and verified pipx installation.
-
-The earlier Phase 8 run [41666703215](https://github.com/AbuTaha7000D/jxcel/actions/runs/41666703215) validated commit `f351669e6ed5ef072eb888e9a2f2f85401832210` on Windows and macOS with the original 299-test suite.
-
-Release notes for version `0.1.0` are in [RELEASE_NOTES.md](https://github.com/AbuTaha7000D/jxcel/blob/main/RELEASE_NOTES.md).
-
-## Requirements
-
-- Python 3.11 or newer is declared. Python 3.11, 3.12, 3.13, and 3.14 have all been exercised on Ubuntu 24.04, Windows 2025, and macOS 15 in run 41933979297.
-- Runtime dependencies: the Python standard library and `openpyxl`.
-- Linux, Windows, and macOS are intended targets. All three have been exercised: Linux locally, and Windows and macOS on GitHub-hosted runners in Phase 8.
-
-## Installation
-
-A package distribution is not published yet. From a local checkout:
+JXCEL 0.1.1 requires Python 3.11 or later and is available on PyPI. Python 3.11–3.14 have been tested on Linux, Windows, and macOS. `openpyxl` is installed automatically.
 
 ```bash
-python -m pip install .
+python -m pip install jxcel==0.1.1
 ```
 
-This command was verified on Linux in an isolated virtual environment and on the Windows and macOS CI runners in Phase 8. The build uses isolation, so it needs access to a package index or a populated build-dependency cache; an offline install fails if the required `setuptools` build dependency is unavailable.
+## Quick start
 
-An isolated installation from the checkout was also verified with `pipx`: 1.18.11 on Linux and 1.18.12 on the Windows and macOS CI runners.
+Save this as `orders.json`:
+
+```json
+{
+  "orders": [
+    {
+      "id": "A-100",
+      "customer": {"name": "Amina", "email": "amina@example.com"},
+      "total": 42.5
+    },
+    {
+      "id": "A-101",
+      "customer": {"name": "Omar", "email": "omar@example.com"},
+      "total": 18.0
+    }
+  ]
+}
+```
+
+Convert it with:
 
 ```bash
-pipx install .
+jxcel orders.json
 ```
 
-Both commands install a `jxcel` command that points at `jxcel.cli:main`. Command availability, the isolated `pipx` command path, and execution from outside the checkout were verified on Linux, Windows, and macOS.
+JXCEL writes `orders.xlsx` beside the input. The workbook contains an `orders` worksheet with columns such as `id`, `customer.name`, `customer.email`, and `total`. Its header is styled and frozen, and the worksheet has an auto-filter.
 
-## Usage
+## What JXCEL discovers
 
-Exactly one input source is required: positional `INPUT` or `-i/--input PATH`.
+A dataset is a non-empty array whose direct elements are all JSON objects. For example, the `/orders` array above is a dataset. JXCEL also searches nested objects and unsupported arrays for independent datasets. Once it finds a dataset, it treats its elements as records and does not search inside those records for more datasets.
+
+Arrays that mix objects with other values, arrays of primitives, nested arrays, and empty arrays are reported as unsupported structures rather than exported as tables. A dataset made only of empty objects is discovered, but cannot be exported because it has no columns.
+
+Each selected, exportable dataset becomes one worksheet. By default, `{"customer":{"name":"Amina"}}` produces a `customer.name` column. With `--no-flatten`, it stays in one `customer` column as compact JSON text: `{"name":"Amina"}`. In a literal key, `.` is encoded as `~1` and `~` as `~0`; this keeps literal names distinct from nested paths. This is JXCEL's column-name format, not JSON Pointer. Arrays inside records are written as compact JSON text, not expanded into additional rows.
+
+Missing properties and `null` values become blank cells. Strings are not converted to numbers or dates, and formula-like strings remain text.
+
+## Inspect and select data
+
+Use these commands to review an input before creating a workbook:
 
 ```bash
-jxcel data.json
-jxcel -i data.json
-jxcel /path/to/data.json
-jxcel -i /path/to/data.json -o result.xlsx
+jxcel orders.json --list
+jxcel orders.json --preview --preview-rows 1
+jxcel orders.json --dry-run -o planned-orders.xlsx
+jxcel orders.json --preview --dry-run -o preview-plan.xlsx
 ```
 
-By default, the output is written beside the input with an `.xlsx` suffix, so `data.json` produces `data.xlsx`. The output parent directory must already exist; jxcel never creates directories.
+- `--list` shows discovered datasets, columns, and unsupported structures without writing a workbook.
+- `--preview` shows up to five records per dataset by default. Set `--preview-rows N` to change the limit.
+- `--dry-run` validates and displays the conversion plan without writing an `.xlsx` file. It includes the output path, selected datasets and columns, and warnings.
+- `--preview --dry-run` shows preview rows as part of the complete plan. `--list` cannot be combined with `--preview` or `--dry-run`.
 
-Existing output files are preserved unless `--overwrite` is supplied:
+Select one or more datasets with `--dataset` and a JSON Pointer. For example, select `/orders` and include only the customer name:
 
 ```bash
-jxcel data.json --overwrite
+jxcel orders.json --dataset /orders --column-map '["/orders","customer.name"]' -o customer-names.xlsx
 ```
 
-Without `--overwrite`, an existing destination is an error. With it, jxcel builds and validates a temporary workbook first, then replaces the destination through the approved publication path. jxcel does not claim crash durability or stronger atomicity than the operating system and filesystem provide.
-
-No-overwrite publication creates the destination with a same-directory hard link, so the temporary and destination files stay on one filesystem. Some filesystems do not support hard links, including FAT32/exFAT and some network or container mounts. On such filesystems, no-overwrite publication fails with exit status 1 and an explicit error. jxcel does not fall back to rename or replace, because that fallback could destroy a destination created concurrently. Overwrite publication uses the operating system's replace operation and depends on that filesystem's support. Hard-link behavior was exercised on Linux `tmpfs` and on the Windows and macOS runner temporary filesystems; other filesystem types, including FAT32/exFAT and network mounts, were not tested.
-
-## Input validation
-
-jxcel reads the input as UTF-8 and accepts an optional UTF-8 BOM. Empty or whitespace-only files, malformed JSON, invalid UTF-8, and trailing content after the JSON value are rejected with exit status 1 and a path-aware error. Malformed JSON reports the line and column; invalid UTF-8 reports the byte offset.
-
-Object keys must be unique at every level. Duplicate keys are rejected even when one is written with an escape such as `\u0061`, because it decodes to the same key; the same key in separate objects is allowed. `NaN`, `Infinity`, and `-Infinity` are rejected as non-standard JSON constants. JSON real numbers must be finite: tokens that overflow a Python float or underflow a nonzero value to zero are rejected. Integers decode as Python integers, subject to Python's configured integer-string conversion limit.
-
-The loader does not restrict the JSON root category: objects, arrays, strings, numbers, booleans, and `null` are all accepted, subject to the validation above. Dataset discovery then treats a root that is not an object or array as `unsupported_root`. Discovery reports an empty array outside dataset records as `empty_array`, and an empty object outside arrays as `empty_object`; neither is an exportable dataset. `--list` and `--preview` report these findings and exit 0; `--dry-run` and conversion exit 1 when no workbook can be produced.
-
-## Inspection modes
-
-The following modes never create a workbook, temporary workbook, or output directory. They are safe to run against an existing destination.
+`--column-map` and `--exclude-map` each take a JSON array with the dataset pointer and exact column name. Both options can be repeated. Exclusions are applied after inclusions and take precedence over them:
 
 ```bash
-jxcel data.json --list
-jxcel data.json --preview
-jxcel data.json --preview --preview-rows 10
-jxcel data.json --dry-run
-jxcel data.json --preview --dry-run
+jxcel orders.json --exclude-map '["/orders","customer.email"]' -o orders-without-email.xlsx
 ```
 
-- `--list` builds schemas, reports dataset pointers, record counts, available columns, effective columns after mappings, non-exportable reasons, and unsupported structures. It performs schema-only validation and does not scan cell values for exportability.
-- `--preview` displays bounded records, respecting dataset and column selection. It prepares only the displayed rows and does not export-validate values outside the preview window. `--preview-rows` defaults to 5 and must be a positive integer.
-- `--dry-run` performs full export validation and shows the selected datasets, effective columns, destination, warnings, and unsupported structures. It validates the destination read-only, so an existing file without `--overwrite` or a missing parent directory fails with exit status 1.
-- `--preview --dry-run` combines both: the full export plan is built once and preview rows come from its validated snapshot.
+JSON Pointer tokens escape `~` as `~0` and `/` as `~1`. The mapping values are JSON strings, so punctuation and Unicode in column names can be represented without splitting the pair.
 
-`--list` cannot be combined with `--preview` or `--dry-run`. `--preview-rows` requires `--preview`. `--output` and `--overwrite` are rejected with `--list` or preview-only mode because they have no effect there; they are valid with `--dry-run` and normal conversion.
+## Output and data limits
 
-## Dataset and column selection
-
-`--dataset` is repeatable and takes a canonical JSON Pointer:
+By default, the output uses the input filename with an `.xlsx` suffix. Use `-o PATH` to choose another path. JXCEL does not create output directories. If the output already exists, conversion fails unless you pass `--overwrite`:
 
 ```bash
-jxcel data.json --dataset /students
-jxcel data.json --dataset /students --dataset /orders
+jxcel orders.json -o report.xlsx --overwrite
 ```
 
-Pointer tokens use JSON Pointer escaping: `~` is written as `~0` and `/` as `~1`. For example, a dataset under the key `a/b~c` has the pointer `/a~1b~0c`.
+JXCEL writes and validates a temporary workbook before replacing an existing output. Without `--overwrite`, publication requires hard-link support on the destination filesystem. If hard links are unavailable, JXCEL fails rather than using a method that could overwrite a file created concurrently. Replacement and durability behavior depend on the operating system and filesystem. Use an output directory you trust; JXCEL does not protect against a hostile local process that can change files in that directory.
 
-Unsupported structures remain visible even when only some datasets are selected. Scalar values and empty objects outside dataset boundaries are listed with their JSON Pointers, so input content that is not exported is visible.
+Input must be UTF-8 JSON; an optional UTF-8 BOM is accepted. Malformed JSON, duplicate object keys, and non-standard values such as `NaN` and `Infinity` are rejected. Floating-point values outside Python's finite range are rejected, and very long integer tokens are subject to Python's configured conversion limit. Documents deeper than 500 nested arrays or objects are rejected, and JXCEL loads the complete document into memory.
 
-`--column-map` and `--exclude-map` are repeatable and take a JSON array of exactly two strings: the dataset pointer and the exact planned column name. Use shell quoting appropriate to your platform.
-
-Bash:
-
-```bash
-jxcel data.json \
-  --column-map '["/students","user.name"]' \
-  --column-map '["/orders","order,id"]' \
-  --exclude-map '["/orders","internal=status"]'
-```
-
-PowerShell (verified on Windows in Phase 8):
-
-```powershell
-jxcel data.json `
-  --column-map '["/students","user.name"]' `
-  --exclude-map '["/orders","internal=status"]'
-```
-
-Mappings are validated against every discovered dataset, but applied only to selected datasets. Include mappings select columns; exclude mappings remove columns afterward and take precedence. In `--dry-run`, a mapping for a valid but unselected dataset is reported as validated but unapplied. Unknown pointers and columns fail clearly.
-
-## Nested values and flattening
-
-Nested objects flatten by default. For example, `user.name` becomes a column named `user.name`. An empty nested object outside an array contributes no column in this mode and produces an `empty_object_omitted` warning with its column path and sample record indexes. Use `--no-flatten` for one column per top-level property:
-
-```bash
-jxcel data.json --no-flatten
-```
-
-With `--no-flatten`, nested objects, arrays, and empty objects are written as compact JSON text (`{}` for an empty object, `[]` for an empty array); an empty object no longer produces an `empty_object_omitted` warning. Arrays never expand into rows or worksheets in either mode, and empty objects inside arrays are preserved as JSON text. Flattened column names use a reversible encoding of the original key path; conflicting flattened names fail rather than overwriting data. With `--no-flatten`, top-level keys are used as column names unchanged.
-
-## Output and exit status
-
-- `stdout`: listings, previews, dry-run plans, warnings, unsupported findings, and the successful conversion summary.
-- `stderr`: errors and argument-parser diagnostics.
-- If the console cannot encode a character, jxcel escapes it; a closed output pipe exits with status 1 without a traceback.
-- Exit `0`: successful help, version, listing, preview, dry-run, or conversion.
-- Exit `1`: input, JSON, planning, mapping, destination, workbook, or publication failure.
-- Exit `2`: command-line argument or usage error.
-
-`--quiet` suppresses only the routine successful conversion summary. Errors, warnings, unsupported findings, and non-exportable dataset notices remain visible. `--quiet` and `--verbose` are mutually exclusive. `--verbose` adds context such as the input path and worksheet assignments.
-
-`--list` and `--preview` treat the absence of an exportable dataset as informational and exit 0 after reporting it. `--dry-run` and normal conversion exit 1 because no workbook can be produced.
-
-## Data preservation
-
-- Strings remain strings; numeric-looking and date-like text is not reinterpreted.
-- Direct integer values with absolute value at least `10**15` are written as text with an `integer_precision_as_text` warning; smaller direct integers remain numeric.
-- Direct float values remain numeric and are never rounded; values with more than 15 significant decimal digits produce a `float_precision_limited` warning, and direct finite floats outside Excel's numeric range fail export validation.
-- Values written as JSON text (arrays in either mode, and nested objects under `--no-flatten`) produce a `nested_value_as_json_text` warning; numbers inside that text are not converted or range-checked individually.
-- Export validation enforces Excel's limits: at most 1,048,575 data rows per dataset (the header uses row 1 of Excel's 1,048,576 rows), at most 16,384 columns, and at most 32,767 UTF-16 code units per cell or column header. Cell text and column headers reject control characters below `U+0020` other than tab, line feed, and carriage return, lone surrogates, and `U+FFFE`/`U+FFFF`; control characters inside JSON-serialized nested values are escaped. These failures are reported rather than truncated.
-- Formula-like strings are written as text, never as formulas.
-- Null and missing values become blank cells.
-
-Warnings are aggregated by code, dataset, and effective column, with an occurrence count and at most five sample record indexes.
-
-## Workbook output
-
-Each selected exportable dataset becomes one worksheet, in plan order. Worksheet names are derived from dataset pointers: the root dataset is `root`, and pointer tokens are joined with dots. Names are sanitized for Excel, truncated to 31 UTF-16 code units, and made unique case-insensitively with `_2`, `_3`, and so on. The name `History` is reserved case-insensitively.
-
-The header row is bold, filled, and vertically centered, with the header row frozen and an auto-filter over the data range. Column widths are based on the header and the first 100 data rows, with padding, and are clamped to 10–60 characters.
-
-The workbook is written and validated through one open temporary-file stream before publication. On POSIX, the temporary file is mode `0600` while it is written and validated; its intended final mode is applied only after validation. With `--overwrite`, an existing regular file's POSIX permission bits are preserved; new files use the platform's normal file-creation mode. A permission failure before publication leaves the existing destination unchanged. Windows temporary files inherit the output directory's ACL; Windows `chmod` does not preserve general ACLs.
-
-Choose an output directory whose access controls are appropriate for the workbook data. jxcel protects against accidental concurrent publishers: no-overwrite publication uses a same-directory hard link, and overwrite uses the operating system's replace operation. It does not defend against a malicious process running as the same user or another user/process with permission to change entries in the output directory. The temporary pathname is still used for publication and cleanup, so a hostile writable output directory is outside the security guarantee.
-
-## Platform validation
-
-The current 12-combination matrix passed in [GitHub Actions run 41933979297](https://github.com/AbuTaha7000D/jxcel/actions/runs/41933979297), validating commit `6d2e5e3f3f0b9cb4a0b7985847a496be744cc1e7`.
-
-| Platform | Status | Evidence |
-|---|---|---|
-| Linux (`ubuntu-24.04`, plus local Fedora 44) | **PASS on Python 3.11–3.14** | All four jobs passed all 309 unit tests and 25 acceptance checks. Each built and inspected wheel/sdist, installed each in isolated environments, ran CLI/pipx smoke checks, and verified publication behavior. |
-| Windows (`windows-2025`, X64) | **PASS on Python 3.11–3.14** | All four jobs passed the 309-test suite (306 passed, three POSIX-only permission-bit tests skipped) and 25 acceptance checks. Windows shell quoting and native console checks passed. |
-| macOS (`macos-15`, ARM64) | **PASS on Python 3.11–3.14** | All four jobs passed all 309 unit tests and 25 acceptance checks. POSIX permission preservation and hard-link publication checks passed. |
-
-Reproducible Linux install and smoke commands, with temporary directories:
-
-```bash
-python -m venv /tmp/jxcel-venv
-/tmp/jxcel-venv/bin/python -m pip install .
-cd /tmp
-/tmp/jxcel-venv/bin/jxcel --version
-/tmp/jxcel-venv/bin/jxcel --help
-```
-
-The Linux, Windows, and macOS Python matrix is automated by `.github/workflows/phase8-cross-platform.yml`, which is dispatched manually. The current verification run is linked above.
-
-The full test suite uses the standard library. Bash:
-
-```bash
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest discover -s tests
-```
-
-PowerShell:
-
-```powershell
-$env:PYTHONDONTWRITEBYTECODE = "1"
-$env:PYTHONPATH = "src"
-python -m unittest discover -s tests
-```
-
-Windows CMD:
-
-```bat
-set PYTHONDONTWRITEBYTECODE=1
-set PYTHONPATH=src
-python -m unittest discover -s tests
-```
-
-## GitHub and PyPI release process
-
-Create each GitHub Release from a version tag (for example, `v0.1.0`) pointing to the reviewed release commit on `main`. GitHub provides source archives for the tag. Creating a GitHub Release does not publish a Python package to PyPI.
-
-The manually dispatched [PyPI workflow](.github/workflows/publish.yml) builds a wheel and source distribution. Its `publish` input defaults to `false`; the publishing job is eligible only when the workflow is dispatched with `publish=true` from a tag whose name begins with `v`. The tag must identify the reviewed release commit. Do not enable that input without separate authorization to publish this release.
-
-The workflow uses [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/) and does not store a PyPI token. Before first publication, configure the PyPI trusted publisher for owner `AbuTaha7000D`, repository `jxcel`, workflow `.github/workflows/publish.yml`, and GitHub environment `pypi`. Configure that GitHub environment with the required release reviewers. The project currently has no PyPI registration; PyPI's [trusted publisher project creation](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/) flow can register it during an explicitly authorized first publish.
-
-## Limitations
-
-- The complete JSON document and the export snapshot are held in memory; jxcel is not a streaming converter.
-- JSON documents nested more than 500 object/array levels are rejected with a path-aware error. This fixed limit avoids interpreter-dependent parser behavior and excessive discovery paths; brackets inside strings do not count.
-- Concurrent mutation of source records while a plan is being built is unsupported. Constructing or forging internal plan objects directly can bypass validation and is outside the supported contract.
-- The matrix covers GitHub-hosted Ubuntu 24.04, Windows 2025, and macOS 15; other OS releases, hardware architectures, and filesystems were not tested.
-- Hard-link publication depends on filesystem support and was exercised on Linux `tmpfs` and the Windows and macOS runner temporary filesystems; other filesystem types were not tested.
-- The current matrix ran Python 3.11–3.14 on all three named operating systems; future interpreter patch releases and OS runner images may differ.
-- The detailed roadmap is maintained locally and is not included in Git or package distributions.
+Excel limits apply: a worksheet can contain at most 1,048,575 data rows and 16,384 columns, and a cell or column name can contain at most 32,767 UTF-16 code units. JXCEL reports invalid or oversized values instead of truncating them. Integers with an absolute value of at least `10^15` are written as text to avoid losing digits. Floating-point values may produce precision warnings, and values outside Excel's supported numeric range are rejected.
 
 ## License
 
-jxcel is licensed under the MIT License. See [LICENSE](LICENSE) for the full text.
-
-## Project guidance
-
-- [AGENTS.md](AGENTS.md) contains repository-wide instructions for coding agents.
-- The detailed product roadmap is maintained locally and may not be present in a checkout.
-
-The former `export_students.py` legacy exporter was removed during project cleanup. It is not part of jxcel or its distributions.
+JXCEL is distributed under the MIT License. See [LICENSE](LICENSE).
