@@ -3,6 +3,11 @@ name: Build and publish to PyPI
 on:
   workflow_dispatch:
     inputs:
+      release_tag:
+        description: Existing version tag to build and publish
+        required: true
+        type: string
+        default: v0.1.0
       publish:
         description: Publish the built artifacts to PyPI (requires separate release authorization)
         required: true
@@ -13,17 +18,97 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build distributions
+  validate:
+    name: Validate release source
     runs-on: ubuntu-24.04
+    outputs:
+      release_sha: ${{ steps.release.outputs.sha }}
     steps:
-      - name: Check out source
+      - name: Check out release tag
         uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.release_tag }}
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.14"
+
+      - name: Validate package version against release tag
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          version_pattern = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+          tag = os.environ["RELEASE_TAG"]
+          match = re.fullmatch(rf"v({version_pattern})", tag)
+          if match is None:
+              raise SystemExit(
+                  f"Invalid release tag {tag!r}; expected vMAJOR.MINOR.PATCH"
+              )
+
+          project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          package_version = project.get("project", {}).get("version")
+          if not isinstance(package_version, str) or re.fullmatch(
+              version_pattern, package_version
+          ) is None:
+              raise SystemExit(
+                  "pyproject.toml must define a stable MAJOR.MINOR.PATCH "
+                  "project.version"
+              )
+
+          tag_version = match.group(1)
+          if tag_version != package_version:
+              raise SystemExit(
+                  f"Release tag version {tag_version} does not match "
+                  f"pyproject.toml project.version {package_version}"
+              )
+
+          print(f"Validated release tag {tag!r} for jxcel {package_version}")
+          PY
+
+      - name: Record validated release commit
+        id: release
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build distributions
+    needs: validate
+    runs-on: ubuntu-24.04
+    outputs:
+      artifact_name: ${{ steps.artifact.outputs.name }}
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.release_tag }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Confirm release commit matches validation
+        env:
+          VALIDATED_RELEASE_SHA: ${{ needs.validate.outputs.release_sha }}
+        run: |
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [ "$checked_out_sha" != "$VALIDATED_RELEASE_SHA" ]; then
+            echo "Release tag resolved to $checked_out_sha during build, but validation checked $VALIDATED_RELEASE_SHA" >&2
+            exit 1
+          fi
+          echo "Building validated release commit $checked_out_sha"
+
+      - name: Choose unique artifact name
+        id: artifact
+        run: echo "name=jxcel-dist-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
       - name: Build wheel and source distribution
         run: |
@@ -35,15 +120,17 @@ jobs:
       - name: Preserve built distributions
         uses: actions/upload-artifact@v4
         with:
-          name: jxcel-dist-${{ github.sha }}
+          name: ${{ steps.artifact.outputs.name }}
           path: dist/*
           if-no-files-found: error
           retention-days: 7
 
   publish:
     name: Publish with PyPI Trusted Publishing
-    if: ${{ inputs.publish && startsWith(github.ref, 'refs/tags/v') }}
-    needs: build
+    if: ${{ inputs.publish && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && needs.validate.result == 'success' && needs.build.result == 'success' }}
+    needs:
+      - validate
+      - build
     runs-on: ubuntu-24.04
     environment:
       name: pypi
@@ -54,7 +141,7 @@ jobs:
       - name: Download built distributions
         uses: actions/download-artifact@v4
         with:
-          name: jxcel-dist-${{ github.sha }}
+          name: ${{ needs.build.outputs.artifact_name }}
           path: dist/
 
       - name: Publish package distributions
