@@ -11,6 +11,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from openpyxl import load_workbook
+from openpyxl.cell.cell import ERROR_CODES
+from openpyxl.worksheet.worksheet import Worksheet
 
 from jxcel import workbook as workbook_module
 from jxcel.discovery import DatasetCandidate
@@ -316,6 +318,40 @@ class WorkbookContentTests(unittest.TestCase):
         finally:
             workbook.close()
 
+    def test_high_precision_floats_export_as_numeric_cells(self):
+        values = (
+            0.30000000000000004,
+            -0.30000000000000004,
+            1.2345678901234567,
+            -1.2345678901234567,
+            123456789.12345678,
+            2.2250738585072014e-308,
+            1e-5,
+            1e22,
+            9.99999999999999e307,
+            -0.0,
+            5.0,
+            0.1,
+            1.0,
+            1.234567890123456,
+        )
+        for index, value in enumerate(values):
+            with self.subTest(value=value):
+                plan = make_plan("/data", ({"a": value},))
+                path = self.output(f"high-precision-{index}.xlsx")
+                export_workbook([plan], path)
+
+                workbook = load_workbook(path)
+                try:
+                    cell = workbook["data"]["A2"]
+                    self.assertEqual(cell.data_type, "n")
+                    self.assertEqual(
+                        cell.value,
+                        float(format(value, ".16g")),
+                    )
+                finally:
+                    workbook.close()
+
     def test_empty_header_is_preserved_as_a_blank_cell(self):
         plan = make_plan("/data", ({"": "value"},))
         export_workbook([plan], self.output())
@@ -466,6 +502,107 @@ class WorkbookContentTests(unittest.TestCase):
             ]
         self.assertTrue(sheet_xml)
         self.assertFalse(any("<f" in xml for xml in sheet_xml))
+
+    def test_excel_error_literals_remain_text(self):
+        error_literals = (
+            "#NULL!",
+            "#DIV/0!",
+            "#VALUE!",
+            "#REF!",
+            "#NAME?",
+            "#NUM!",
+            "#N/A",
+        )
+        plan = make_plan(
+            "/errors",
+            ({literal: literal for literal in error_literals},),
+        )
+        export_workbook([plan], self.output())
+
+        workbook = load_workbook(self.output())
+        try:
+            worksheet = workbook["errors"]
+            for column_number, literal in enumerate(error_literals, start=1):
+                with self.subTest(literal=literal):
+                    header = worksheet.cell(row=1, column=column_number)
+                    self.assertEqual(header.value, literal)
+                    self.assertEqual(header.data_type, "s")
+                    cell = worksheet.cell(row=2, column=column_number)
+                    self.assertEqual(cell.value, literal)
+                    self.assertEqual(cell.data_type, "s")
+        finally:
+            workbook.close()
+
+    def test_all_openpyxl_error_codes_remain_text(self):
+        error_codes = tuple(ERROR_CODES)
+        self.assertTrue(error_codes)
+        plan = make_plan(
+            "/all-errors",
+            ({code: code for code in error_codes},),
+        )
+        export_workbook([plan], self.output())
+
+        workbook = load_workbook(self.output())
+        try:
+            worksheet = workbook["all-errors"]
+            for column_number, code in enumerate(error_codes, start=1):
+                with self.subTest(code=code):
+                    self.assertEqual(
+                        worksheet.cell(row=1, column=column_number).value,
+                        code,
+                    )
+                    cell = worksheet.cell(row=2, column=column_number)
+                    self.assertEqual(cell.value, code)
+                    self.assertEqual(cell.data_type, "s")
+        finally:
+            workbook.close()
+
+    def test_error_literal_in_flattened_nested_key_remains_text(self):
+        plan = make_plan(
+            "/nested-errors",
+            ({"outer": {"#N/A": "#VALUE!"}},),
+        )
+        export_workbook([plan], self.output())
+
+        workbook = load_workbook(self.output())
+        try:
+            worksheet = workbook["nested-errors"]
+            self.assertEqual(worksheet["A1"].value, "outer.#N/A")
+            self.assertEqual(worksheet["A1"].data_type, "s")
+            self.assertEqual(worksheet["A2"].value, "#VALUE!")
+            self.assertEqual(worksheet["A2"].data_type, "s")
+        finally:
+            workbook.close()
+
+    def test_error_literal_edge_cases_remain_text(self):
+        plan = make_plan(
+            "/edges",
+            (
+                {
+                    "formula": "=1+1",
+                    "similar": "#N/A!",
+                    "empty": "",
+                    "arabic": "مرحبا",
+                    "whitespace": " x ",
+                },
+            ),
+        )
+        export_workbook([plan], self.output())
+
+        workbook = load_workbook(self.output())
+        try:
+            worksheet = workbook["edges"]
+            self.assertEqual(worksheet["A2"].value, "=1+1")
+            self.assertEqual(worksheet["A2"].data_type, "s")
+            self.assertEqual(worksheet["B2"].value, "#N/A!")
+            self.assertEqual(worksheet["B2"].data_type, "s")
+            self.assertIsNone(worksheet["C2"].value)
+            self.assertEqual(worksheet["D2"].value, "مرحبا")
+            self.assertEqual(worksheet["D2"].data_type, "s")
+            self.assertEqual(worksheet["E2"].value, " x ")
+            self.assertEqual(worksheet["E2"].data_type, "s")
+        finally:
+            workbook.close()
 
     def test_restrained_formatting_is_applied(self):
         plan = make_plan(
@@ -741,6 +878,32 @@ class WorkbookValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkbookError, "expected text"):
             workbook_module._validate_workbook(path, [plan], assignments)
 
+    def test_validation_rejects_float_that_differs_from_serialized_value(self):
+        plan, assignments, path = self.write_workbook(
+            make_plan("/data", ({"a": 0.30000000000000004},))
+        )
+        workbook = load_workbook(path)
+        workbook["data"]["A2"] = 0.3000000000000001
+        workbook.save(path)
+        workbook.close()
+        with self.assertRaisesRegex(WorkbookError, "expected numeric value"):
+            workbook_module._validate_workbook(path, [plan], assignments)
+
+    def test_validation_rejects_different_integer_value(self):
+        plan, assignments, path = self.write_workbook(
+            make_plan("/data", ({"a": 1},))
+        )
+        workbook_module._validate_workbook(path, [plan], assignments)
+        workbook = load_workbook(path)
+        workbook["data"]["A2"] = 2
+        workbook.save(path)
+        workbook.close()
+        with self.assertRaisesRegex(
+            WorkbookError,
+            "expected numeric value 1, found 2",
+        ):
+            workbook_module._validate_workbook(path, [plan], assignments)
+
     def test_validation_rejects_text_in_numeric_cell(self):
         plan = make_plan("/data", ({"a": 1},))
         assignments = assign_sheet_names([plan])
@@ -762,6 +925,23 @@ class WorkbookValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkbookError, "formula"):
             workbook_module._validate_workbook(path, [plan], assignments)
 
+    def test_validation_rejects_error_typed_cell(self):
+        plan, assignments, path = self.write_workbook(
+            make_plan("/data", ({"a": "#N/A"},))
+        )
+        workbook = load_workbook(path)
+        cell = workbook["data"]["A2"]
+        self.assertEqual(cell.value, "#N/A")
+        self.assertEqual(cell.data_type, "s")
+        cell.data_type = "e"
+        workbook.save(path)
+        workbook.close()
+        with self.assertRaisesRegex(
+            WorkbookError,
+            r"expected text '#N/A', found type 'e'",
+        ):
+            workbook_module._validate_workbook(path, [plan], assignments)
+
     def test_validation_rejects_extra_rows(self):
         plan, assignments, path = self.write_workbook()
         workbook = load_workbook(path)
@@ -770,6 +950,138 @@ class WorkbookValidationTests(unittest.TestCase):
         workbook.close()
         with self.assertRaisesRegex(WorkbookError, "rows"):
             workbook_module._validate_workbook(path, [plan], assignments)
+
+
+class ValidationScalingTests(unittest.TestCase):
+    """Dimension lookups during validation must not scale with cell count."""
+
+    def setUp(self):
+        self._temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary_directory.cleanup)
+        self.directory = Path(self._temporary_directory.name)
+
+    def count_dimension_accesses(self, plans):
+        assignments = assign_sheet_names(plans)
+        path = self.directory / "scaling.xlsx"
+        workbook_module._write_workbook(plans, assignments, path)
+        workbook = load_workbook(path)
+
+        max_row_accesses = []
+        max_column_accesses = []
+        original_max_row = Worksheet.max_row
+        original_max_column = Worksheet.max_column
+
+        def counting_property(original, accesses):
+            def fget(worksheet):
+                accesses.append(worksheet.title)
+                return original.fget(worksheet)
+
+            return property(fget, original.fset, original.fdel, original.__doc__)
+
+        with patch.object(
+            Worksheet,
+            "max_row",
+            counting_property(original_max_row, max_row_accesses),
+        ), patch.object(
+            Worksheet,
+            "max_column",
+            counting_property(original_max_column, max_column_accesses),
+        ), patch.object(
+            workbook_module,
+            "load_workbook",
+            return_value=workbook,
+        ):
+            workbook_module._validate_workbook(path, plans, assignments)
+
+        return max_row_accesses, max_column_accesses
+
+    def test_dimension_accesses_do_not_scale_with_rows(self):
+        small_plan = make_plan(
+            "/data",
+            tuple(
+                {
+                    "integer": index,
+                    "text": f"record-{index}",
+                    "float": index + 0.25,
+                }
+                for index in range(5)
+            ),
+        )
+        large_plan = make_plan(
+            "/data",
+            tuple(
+                {
+                    "integer": index,
+                    "text": f"record-{index}",
+                    "float": index + 0.25,
+                }
+                for index in range(200)
+            ),
+        )
+
+        small_counts = self.count_dimension_accesses([small_plan])
+        large_counts = self.count_dimension_accesses([large_plan])
+
+        self.assertEqual(small_counts, large_counts)
+
+    def test_dimension_accesses_are_constant_per_worksheet(self):
+        small_plans = make_plans(
+            [
+                (
+                    "/data",
+                    tuple(
+                        {
+                            "integer": index,
+                            "text": f"record-{index}",
+                            "float": index + 0.25,
+                        }
+                        for index in range(5)
+                    ),
+                ),
+                (
+                    "/other",
+                    tuple(
+                        {
+                            "integer": index,
+                            "text": f"record-{index}",
+                            "float": index + 0.5,
+                        }
+                        for index in range(7)
+                    ),
+                ),
+            ]
+        )
+        large_plans = make_plans(
+            [
+                (
+                    "/data",
+                    tuple(
+                        {
+                            "integer": index,
+                            "text": f"record-{index}",
+                            "float": index + 0.25,
+                        }
+                        for index in range(200)
+                    ),
+                ),
+                (
+                    "/other",
+                    tuple(
+                        {
+                            "integer": index,
+                            "text": f"record-{index}",
+                            "float": index + 0.5,
+                        }
+                        for index in range(250)
+                    ),
+                ),
+            ]
+        )
+
+        small_counts = self.count_dimension_accesses(small_plans)
+        large_counts = self.count_dimension_accesses(large_plans)
+
+        self.assertEqual(small_counts, large_counts)
 
 
 class DestinationValidationTests(unittest.TestCase):

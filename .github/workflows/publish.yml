@@ -7,7 +7,6 @@ on:
         description: Existing version tag to build and publish
         required: true
         type: string
-        default: v0.1.0
       publish:
         description: Publish the built artifacts to PyPI (requires separate release authorization)
         required: true
@@ -18,90 +17,170 @@ permissions:
   contents: read
 
 jobs:
-  validate:
-    name: Validate release source
+  preflight:
+    name: Validate release tag against main
     runs-on: ubuntu-24.04
     outputs:
       release_sha: ${{ steps.release.outputs.sha }}
     steps:
-      - name: Check out release tag
-        uses: actions/checkout@v4
+      - name: Verify workflow was dispatched from main
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$DISPATCH_REF" != "refs/heads/main" ]; then
+            echo "::error title=Invalid dispatch ref::Publishing must be dispatched from refs/heads/main, got $DISPATCH_REF"
+            exit 1
+          fi
+
+      - name: Check out main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: refs/tags/${{ inputs.release_tag }}
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
           persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-
-      - name: Validate package version against release tag
+      - name: Validate release tag
+        id: release
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          python - <<'PY'
+          set -euo pipefail
+          version_pattern='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+          if ! [[ "$RELEASE_TAG" =~ ^v${version_pattern}$ ]]; then
+            echo "::error title=Invalid release tag::Expected vMAJOR.MINOR.PATCH without leading zeros, got '$RELEASE_TAG'"
+            exit 1
+          fi
+
+          git fetch --force --tags origin
+          git fetch --force origin '+refs/heads/main:refs/remotes/origin/main'
+
+          if ! git rev-parse --verify --quiet "refs/tags/${RELEASE_TAG}^{commit}" >/dev/null; then
+            echo "::error title=Missing release tag::Tag '$RELEASE_TAG' does not exist on origin"
+            exit 1
+          fi
+          tag_sha="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+
+          if ! git merge-base --is-ancestor "$tag_sha" refs/remotes/origin/main; then
+            echo "::error title=Tag not on main::Tag '$RELEASE_TAG' ($tag_sha) is not an ancestor of origin/main"
+            exit 1
+          fi
+
+          metadata_dir="$RUNNER_TEMP/release-metadata"
+          rm -rf "$metadata_dir"
+          mkdir -p "$metadata_dir"
+          git show "${tag_sha}:pyproject.toml" > "$metadata_dir/pyproject.toml"
+          git show "${tag_sha}:src/jxcel/__init__.py" > "$metadata_dir/__init__.py"
+
+          python - "$metadata_dir" "$tag_sha" <<'PY'
+          import ast
           import os
           import re
+          import sys
           import tomllib
           from pathlib import Path
 
-          version_pattern = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+          metadata_dir = Path(sys.argv[1])
+          tag_sha = sys.argv[2]
           tag = os.environ["RELEASE_TAG"]
+          version_pattern = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
           match = re.fullmatch(rf"v({version_pattern})", tag)
           if match is None:
-              raise SystemExit(
-                  f"Invalid release tag {tag!r}; expected vMAJOR.MINOR.PATCH"
+              print(
+                  "::error title=Invalid release tag::"
+                  f"Expected vMAJOR.MINOR.PATCH without leading zeros, got {tag!r}"
               )
-
-          project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-          package_version = project.get("project", {}).get("version")
-          if not isinstance(package_version, str) or re.fullmatch(
-              version_pattern, package_version
-          ) is None:
-              raise SystemExit(
-                  "pyproject.toml must define a stable MAJOR.MINOR.PATCH "
-                  "project.version"
-              )
-
+              raise SystemExit(1)
           tag_version = match.group(1)
-          if tag_version != package_version:
-              raise SystemExit(
-                  f"Release tag version {tag_version} does not match "
-                  f"pyproject.toml project.version {package_version}"
-              )
 
-          print(f"Validated release tag {tag!r} for jxcel {package_version}")
+          project_version = tomllib.loads(
+              (metadata_dir / "pyproject.toml").read_text(encoding="utf-8")
+          )["project"]["version"]
+
+          module = ast.parse(
+              (metadata_dir / "__init__.py").read_text(encoding="utf-8")
+          )
+          package_version = None
+          for node in module.body:
+              if isinstance(node, ast.Assign):
+                  targets = node.targets
+                  value = node.value
+              elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                  targets = [node.target]
+                  value = node.value
+              else:
+                  continue
+              if any(
+                  isinstance(target, ast.Name) and target.id == "__version__"
+                  for target in targets
+              ):
+                  package_version = ast.literal_eval(value)
+                  break
+
+          if not isinstance(package_version, str):
+              print(
+                  "::error title=Missing package version::"
+                  "src/jxcel/__init__.py must define a literal __version__ string"
+              )
+              raise SystemExit(1)
+
+          mismatches = []
+          if tag_version != project_version:
+              mismatches.append(
+                  f"tag {tag!r} version {tag_version} != "
+                  f"pyproject.toml project.version {project_version}"
+              )
+          if tag_version != package_version:
+              mismatches.append(
+                  f"tag {tag!r} version {tag_version} != "
+                  f"src/jxcel/__init__.py __version__ {package_version}"
+              )
+          if mismatches:
+              for mismatch in mismatches:
+                  print(f"::error title=Version mismatch::{mismatch}")
+              raise SystemExit(1)
+
+          print(f"Validated release tag {tag!r} for jxcel {tag_version} at {tag_sha}")
           PY
 
-      - name: Record validated release commit
-        id: release
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: Verify release tag on all platforms
+    needs: preflight
+    uses: ./.github/workflows/phase8-cross-platform.yml
+    with:
+      ref: ${{ needs.preflight.outputs.release_sha }}
 
   build:
     name: Build distributions
-    needs: validate
+    needs:
+      - preflight
+      - verify
+    if: ${{ needs.preflight.result == 'success' && needs.verify.result == 'success' }}
     runs-on: ubuntu-24.04
     outputs:
       artifact_name: ${{ steps.artifact.outputs.name }}
     steps:
       - name: Check out release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: refs/tags/${{ inputs.release_tag }}
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.14"
 
       - name: Confirm release commit matches validation
         env:
-          VALIDATED_RELEASE_SHA: ${{ needs.validate.outputs.release_sha }}
+          VALIDATED_RELEASE_SHA: ${{ needs.preflight.outputs.release_sha }}
         run: |
           checked_out_sha="$(git rev-parse HEAD)"
           if [ "$checked_out_sha" != "$VALIDATED_RELEASE_SHA" ]; then
-            echo "Release tag resolved to $checked_out_sha during build, but validation checked $VALIDATED_RELEASE_SHA" >&2
+            echo "Release tag resolved to $checked_out_sha during build, but preflight validated $VALIDATED_RELEASE_SHA" >&2
             exit 1
           fi
           echo "Building validated release commit $checked_out_sha"
@@ -118,7 +197,7 @@ jobs:
           test "$(find dist -maxdepth 1 -name '*.tar.gz' | wc -l)" -eq 1
 
       - name: Preserve built distributions
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: dist/*
@@ -127,10 +206,11 @@ jobs:
 
   publish:
     name: Publish with PyPI Trusted Publishing
-    if: ${{ inputs.publish && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && needs.validate.result == 'success' && needs.build.result == 'success' }}
     needs:
-      - validate
+      - preflight
+      - verify
       - build
+    if: ${{ inputs.publish && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && needs.preflight.result == 'success' && needs.verify.result == 'success' && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     environment:
       name: pypi
@@ -139,12 +219,12 @@ jobs:
       id-token: write
     steps:
       - name: Download built distributions
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ needs.build.outputs.artifact_name }}
           path: dist/
 
       - name: Publish package distributions
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           packages-dir: dist/

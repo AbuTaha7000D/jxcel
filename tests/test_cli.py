@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from openpyxl import load_workbook
 
+from jxcel import __version__
 from jxcel.cli import main
 
 
@@ -194,7 +195,7 @@ class ArgumentParsingTests(CliTestCase):
 
         code, stdout, _ = self.run_argument_error("--version")
         self.assertEqual(code, 0)
-        self.assertIn("jxcel 0.1.1", stdout)
+        self.assertIn(f"jxcel {__version__}", stdout)
 
         code, _, stderr = self.run_argument_error("--unknown-option")
         self.assertEqual(code, 2)
@@ -727,6 +728,61 @@ class ConversionTests(CliTestCase):
         self.assertIn(f"Input: {str(path)!r}", stdout)
         self.assertIn("Exported:", stdout)
 
+    def test_high_precision_float_exports_with_warning(self):
+        value = 0.30000000000000004
+        path = self.write_json([{"a": value}])
+
+        code, stdout, stderr = self.run_cli(path)
+
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("float_precision_limited", stdout)
+        workbook = load_workbook(self.root / "data.xlsx")
+        try:
+            cell = workbook["root"]["A2"]
+            self.assertEqual(cell.data_type, "n")
+            self.assertEqual(cell.value, float(format(value, ".16g")))
+        finally:
+            workbook.close()
+
+    def test_dry_run_and_export_agree_for_high_precision_float_edges(self):
+        source = (
+            '[{"negative":-0.30000000000000004,"large":1e22,'
+            '"carry":9.9999999999999995,"near_max":9.99999999999999e307}]'
+        )
+        values = json.loads(source)[0]
+        self.assertEqual(values["carry"], 10.0)
+        path = self.write_json(source)
+        output = self.root / "data.xlsx"
+
+        dry_code, dry_stdout, dry_stderr = self.run_cli(
+            path,
+            "--dry-run",
+        )
+        self.assertEqual(dry_code, 0, dry_stderr)
+        self.assertIn("float_precision_limited", dry_stdout)
+        self.assertFalse(output.exists())
+
+        code, stdout, stderr = self.run_cli(path)
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("float_precision_limited", stdout)
+        self.assertTrue(output.exists())
+        workbook = load_workbook(output)
+        try:
+            worksheet = workbook["root"]
+            for column, header in enumerate(
+                (cell.value for cell in worksheet[1]),
+                start=1,
+            ):
+                value = values[header]
+                cell = worksheet.cell(row=2, column=column)
+                self.assertEqual(cell.data_type, "n")
+                self.assertEqual(
+                    cell.value,
+                    float(format(value, ".16g")),
+                )
+        finally:
+            workbook.close()
+
     def test_formula_like_strings_remain_text(self):
         path = self.write_json(
             [{"formula": "=1+1", "other": "+SUM(A1)"}]
@@ -741,6 +797,26 @@ class ConversionTests(CliTestCase):
             self.assertEqual(worksheet["A2"].value, "=1+1")
             self.assertEqual(worksheet["A2"].data_type, "s")
             self.assertEqual(worksheet["B2"].value, "+SUM(A1)")
+        finally:
+            workbook.close()
+
+    def test_error_literal_strings_export_as_text(self):
+        path = self.write_json(
+            [{"error": "#N/A", "other": "#DIV/0!", "formula": "=1+1"}]
+        )
+
+        code, _, _ = self.run_cli(path)
+
+        self.assertEqual(code, 0)
+        workbook = load_workbook(self.root / "data.xlsx")
+        try:
+            worksheet = workbook["root"]
+            self.assertEqual(worksheet["A2"].value, "#N/A")
+            self.assertEqual(worksheet["A2"].data_type, "s")
+            self.assertEqual(worksheet["B2"].value, "#DIV/0!")
+            self.assertEqual(worksheet["B2"].data_type, "s")
+            self.assertEqual(worksheet["C2"].value, "=1+1")
+            self.assertEqual(worksheet["C2"].data_type, "s")
         finally:
             workbook.close()
 

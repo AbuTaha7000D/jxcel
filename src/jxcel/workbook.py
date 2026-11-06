@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import BinaryIO, Sequence
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.cell.cell import ERROR_CODES
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -26,6 +27,7 @@ _INVALID_SHEET_NAME_CHARACTERS = frozenset("\\*?:/[]")
 _HEADER_FONT = Font(bold=True)
 _HEADER_FILL = PatternFill(fill_type="solid", fgColor="D9E1F2")
 _HEADER_ALIGNMENT = Alignment(vertical="center")
+_EXCEL_ERROR_LITERALS = frozenset(ERROR_CODES)
 
 
 class WorkbookError(Exception):
@@ -416,7 +418,10 @@ def _write_workbook(
                     if (
                         value.kind == "text"
                         and isinstance(value.value, str)
-                        and value.value.startswith("=")
+                        and (
+                            value.value.startswith("=")
+                            or value.value in _EXCEL_ERROR_LITERALS
+                        )
                     ):
                         worksheet.cell(
                             row=row_number,
@@ -581,7 +586,10 @@ def _validate_prepared_cell(
                 f"expected a numeric value, found type {cell_type!r} "
                 f"and value {cell_value!r}",
             )
-        if cell_value != expected.value:
+        accepted = (expected.value,)
+        if expected.kind == "float":
+            accepted += (float(format(expected.value, ".16g")),)
+        if cell_value not in accepted:
             raise _cell_error(
                 path,
                 assignment,
@@ -633,23 +641,25 @@ def _validate_workbook(
 
         for plan, assignment in zip(plans, assignments):
             worksheet = workbook[assignment.name]
+            worksheet_max_row = worksheet.max_row
+            worksheet_max_column = worksheet.max_column
             headers = [
                 column.name for column in plan.effective_columns
             ]
-            if worksheet.max_column != len(headers):
+            if worksheet_max_column != len(headers):
                 raise WorkbookError(
                     f"Workbook validation failed for worksheet "
                     f"{assignment.name!r}: expected {len(headers)} columns, "
-                    f"found {worksheet.max_column}",
+                    f"found {worksheet_max_column}",
                     output_path=display_path,
                     dataset_pointer=plan.pointer,
                     sheet_name=assignment.name,
                 )
             planned_last_row = 1 + plan.row_count
-            if worksheet.max_row > planned_last_row:
+            if worksheet_max_row > planned_last_row:
                 raise WorkbookError(
                     f"Workbook validation failed for worksheet "
-                    f"{assignment.name!r}: found {worksheet.max_row} rows, "
+                    f"{assignment.name!r}: found {worksheet_max_row} rows, "
                     f"but the plan has only {planned_last_row}",
                     output_path=display_path,
                     dataset_pointer=plan.pointer,
@@ -697,8 +707,8 @@ def _validate_workbook(
                     start=1,
                 ):
                     if (
-                        row_number <= worksheet.max_row
-                        and column_number <= worksheet.max_column
+                        row_number <= worksheet_max_row
+                        and column_number <= worksheet_max_column
                     ):
                         cell = worksheet.cell(
                             row=row_number,
@@ -719,7 +729,10 @@ def _validate_workbook(
                         column_number,
                     )
 
-            for row in worksheet.iter_rows():
+            for row in worksheet.iter_rows(
+                max_row=worksheet_max_row,
+                max_col=worksheet_max_column,
+            ):
                 for cell in row:
                     if cell.data_type == "f":
                         raise _cell_error(
